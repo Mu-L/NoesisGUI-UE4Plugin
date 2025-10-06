@@ -339,12 +339,12 @@ enum class ENoesisTickBarPlacement : uint8
 	Bottom
 };
 
-UENUM()
+UENUM(BlueprintType)
 enum class ENoesisTextWrapping : uint8
 {
-	NoWrap,
-	Wrap,
-	WrapWithOverflow
+	NoWrap = Noesis::TextWrapping_NoWrap,
+	Wrap = Noesis::TextWrapping_Wrap,
+	WrapWithOverflow = Noesis::TextWrapping_WrapWithOverflow
 };
 
 UENUM()
@@ -363,13 +363,13 @@ enum class ENoesisRepeatMode : uint8
 	Forever
 };
 
-UENUM()
+UENUM(BlueprintType)
 enum class ENoesisVerticalAlignment : uint8
 {
-	Top,
-	Center,
-	Bottom,
-	Stretch
+	Top = Noesis::VerticalAlignment_Top,
+	Center = Noesis::VerticalAlignment_Center,
+	Bottom = Noesis::VerticalAlignment_Bottom,
+	Stretch = Noesis::VerticalAlignment_Stretch
 };
 
 UENUM()
@@ -405,13 +405,13 @@ enum class ENoesisEasingMode : uint8
 	EaseInOut
 };
 
-UENUM()
+UENUM(BlueprintType)
 enum class ENoesisTextAlignment : uint8
 {
-	Center,
-	Justify,
-	Left,
-	Right
+	Center = Noesis::TextAlignment_Center,
+	Justify = Noesis::TextAlignment_Justify,
+	Left = Noesis::TextAlignment_Left,
+	Right = Noesis::TextAlignment_Right
 };
 
 UENUM()
@@ -425,12 +425,12 @@ enum class ENoesisPanningMode : uint8
 	VerticalOnly
 };
 
-UENUM()
+UENUM(BlueprintType)
 enum class ENoesisVisibility : uint8
 {
-	Collapsed,
-	Hidden,
-	Visible
+	Collapsed = Noesis::Visibility_Collapsed,
+	Hidden = Noesis::Visibility_Hidden,
+	Visible = Noesis::Visibility_Visible
 };
 
 UENUM()
@@ -482,13 +482,13 @@ enum class ENoesisPopupAnimation : uint8
 	Scroll
 };
 
-UENUM()
+UENUM(BlueprintType)
 enum class ENoesisHorizontalAlignment : uint8
 {
-	Left,
-	Center,
-	Right,
-	Stretch
+	Left = Noesis::HorizontalAlignment_Left,
+	Center = Noesis::HorizontalAlignment_Center,
+	Right = Noesis::HorizontalAlignment_Right,
+	Stretch = Noesis::HorizontalAlignment_Stretch
 };
 
 UENUM()
@@ -540,12 +540,12 @@ enum class ENoesisFillRule : uint8
 	Nonzero
 };
 
-UENUM()
+UENUM(BlueprintType)
 enum class ENoesisTextTrimming : uint8
 {
-	None,
-	CharacterEllipsis,
-	WordEllipsis
+	None = Noesis::TextTrimming_None,
+	CharacterEllipsis = Noesis::TextTrimming_CharacterEllipsis,
+	WordEllipsis = Noesis::TextTrimming_WordEllipsis
 };
 
 UENUM()
@@ -556,11 +556,11 @@ enum class ENoesisGradientSpreadMethod : uint8
 	Repeat
 };
 
-UENUM()
+UENUM(BlueprintType)
 enum class ENoesisOrientation : uint8
 {
-	Horizontal,
-	Vertical
+	Horizontal = Noesis::Orientation_Horizontal,
+	Vertical = Noesis::Orientation_Vertical
 };
 
 UENUM()

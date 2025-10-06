@@ -43,6 +43,10 @@ public:
 	UPROPERTY(EditAnywhere, Category = "Noesis View")
 	bool EnablePPAA;
 
+	/** When enabled, the view is scaled by the DPI Curve specified in the Project settings. */
+	UPROPERTY(EditAnywhere, Category = "Noesis View", meta = (DisplayName = "DPI Scale"))
+	bool DPIScale;
+
 	/** Specifies tessellation quality. */
 	UPROPERTY(EditAnywhere, Category = "Noesis View")
 	ENoesisTessellationQuality TessellationQuality;

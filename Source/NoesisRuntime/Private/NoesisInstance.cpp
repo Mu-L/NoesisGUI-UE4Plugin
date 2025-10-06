@@ -30,6 +30,7 @@
 #endif
 #include "Engine/Engine.h"
 #include "SceneViewExtension.h"
+#include "Engine/UserInterfaceSettings.h"
 
 // RHI includes
 #if UE_VERSION_OLDER_THAN(5, 2, 0)
@@ -245,7 +246,7 @@ void FNoesisSlateElement::DrawRenderThread(FRHICommandListImmediate& RHICmdList,
 	// Clear the stencil buffer
 	SCOPE_CYCLE_COUNTER(STAT_NoesisInstance_Draw);
 	FRHIRenderPassInfo RPInfo(ColorTarget, ERenderTargetActions::Load_Store, GDepthStencilTarget,
-		MakeDepthStencilTargetActions(ERenderTargetActions::DontLoad_DontStore, ERenderTargetActions::Clear_Store), FExclusiveDepthStencil::DepthNop_StencilWrite);
+		MakeDepthStencilTargetActions(ERenderTargetActions::DontLoad_DontStore, ERenderTargetActions::Clear_DontStore), FExclusiveDepthStencil::DepthNop_StencilWrite);
 
 	check(RHICmdList.IsOutsideRenderPass());
 	RHICmdList.BeginRenderPass(RPInfo, TEXT("NoesisOnScreen"));
@@ -267,8 +268,8 @@ void FNoesisSlateElement::Draw_RenderThread(FRDGBuilder& GraphBuilder, const FDr
 	ViewProjectionMatrix = GViewProjectionMatrix;
 	EngineGamma = (!GIsEditor && (ColorTargetDesc.Format == PF_FloatRGBA)/* && (Params.bIsHDR == false)*/) ? 1.0f : EngineGamma;
 
-	FIntVector ColorTargetSize = ColorTargetDesc.GetSize();
-	if (!GDepthStencilTarget.IsValid() || GDepthStencilTarget->GetDesc().GetSize() != ColorTargetSize)
+	FIntPoint ColorTargetSize = ColorTargetDesc.Extent;
+	if (!GDepthStencilTarget.IsValid() || GDepthStencilTarget->GetDesc().Extent != ColorTargetSize)
 	{
 		GDepthStencilTarget.SafeRelease();
 		uint32 SizeX = ColorTargetSize.X;
@@ -366,11 +367,11 @@ void FNoesisSlateElement::RenderOnscreen(FRHICommandList& RHICmdList, bool WithV
 	{
 		if (IsMobileMultiView || IsInstancedStereo)
 		{
-			Renderer->Render(ViewProj, LeftEyeViewProj, RightEyeViewProj);
+			Renderer->RenderStereo(LeftEyeViewProj, RightEyeViewProj);
 		}
 		else
 		{
-			Renderer->Render(ViewProj);
+			Renderer->RenderStereo(ViewProj);
 		}
 	}
 	else
@@ -885,7 +886,12 @@ void UNoesisInstance::Update()
 	if (Xaml && XamlView)
 	{
 		XamlView->SetSize(Width, Height);
-		
+
+		const UUserInterfaceSettings* UserSettings = GetDefault<UUserInterfaceSettings>();
+		float Dpi = UserSettings->GetDPIScaleBasedOnSize(FIntPoint((int32)Width, (int32)Height));
+		float Scale = !Is3DWidget && DPIScale && Dpi > 0.0f ? Dpi : 1.0f;
+		XamlView->SetScale(Scale);
+
 		if (PixelDepthBias >= 0.f)
 		{
 			float D = PixelDepthBias / 1000.f;
@@ -1019,14 +1025,20 @@ void UNoesisInstance::Tick3DWidget(UWorld* World, ELevelTick TickType, float Del
 					LocalPlayer->GetProjectionData(Viewport, ViewProjectionData, INDEX_NONE);
 					auto UnscaledViewRect = ViewProjectionData.GetConstrainedViewRect();
 					//auto UnconstrainedViewRect = ViewProjectionData.GetViewRect();
-					Left = UnscaledViewRect.Min.X;
-					Top = UnscaledViewRect.Min.Y;
-					Width = (UnscaledViewRect.Max.X - Left);
-					Height = (UnscaledViewRect.Max.Y - Top);
 
 					auto StereoRenderingDevice = GEngine->StereoRenderingDevice.Get();
 					if (GEngine->IsStereoscopic3D() && StereoRenderingDevice != nullptr)
 					{
+						int32 X = UnscaledViewRect.Min.X;
+						int32 Y = UnscaledViewRect.Min.Y;
+						uint32 SizeX = UnscaledViewRect.Max.X - UnscaledViewRect.Min.X;
+						uint32 SizeY = UnscaledViewRect.Max.Y - UnscaledViewRect.Min.Y;
+						StereoRenderingDevice->AdjustViewRect(0, X, Y, SizeX, SizeY);
+						Left = X;
+						Top = Y;
+						Width = SizeX;
+						Height = SizeY;
+						
 						auto WorldToMetersScale = PlayerController->GetWorldSettings()->WorldToMeters;
 						FVector MonoLocation;
 						FRotator MonoRotation;
@@ -1050,9 +1062,14 @@ void UNoesisInstance::Tick3DWidget(UWorld* World, ELevelTick TickType, float Del
 							}
 						);
 						XamlView->SetProjectionMatrix(ViewProj);
-								}
+					}
 					else
 					{
+						Left = UnscaledViewRect.Min.X;
+						Top = UnscaledViewRect.Min.Y;
+						Width = (UnscaledViewRect.Max.X - Left);
+						Height = (UnscaledViewRect.Max.Y - Top);
+
 						Noesis::Matrix4 ViewProj = UnrealToNoesisViewProj(ViewProjectionData.ComputeViewProjectionMatrix(), Width, Height);
 
 						ENQUEUE_RENDER_COMMAND(CopyViewProj)

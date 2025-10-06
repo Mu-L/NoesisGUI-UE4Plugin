@@ -13,9 +13,6 @@
 #include "EditorFramework/AssetImportData.h"
 #include "Engine/World.h"
 
-// NoesisRuntime includes
-#include "NoesisThumbnailRenderer.h"
-
 // NoesisGUI includes
 #include "NsGui/Border.h"
 #include "NsGui/Brushes.h"
@@ -65,7 +62,7 @@ void UNoesisRive::GetAssetRegistryTags(FAssetRegistryTagsContext Context) const
 #if WITH_EDITOR
 void UNoesisRive::RenderThumbnail(FIntRect ViewportRect, const FTextureRHIRef& BackBuffer)
 {
-	if (ThumbnailView == nullptr)
+	if (!ThumbnailRenderer.IsInitialized())
 	{
 		UObject* Package = GetOutermost();
 		FString PackageRoot, PackagePath, PackageName;
@@ -79,19 +76,19 @@ void UNoesisRive::RenderThumbnail(FIntRect ViewportRect, const FTextureRHIRef& B
 		Noesis::Ptr<Noesis::Border> Root = Noesis::MakePtr<Noesis::Border>();
 		Root->SetChild(Rive);
 
-		ThumbnailView = FNoesisThumbnailRenderer::CreateView(Root);
+		ThumbnailRenderer.Initialize(Root);
 	}
 
 	UWorld* World = GetWorld();
 	if (!IsValid(World)) World = GWorld.GetReference();
 	if (IsValid(World))
 	{
-		FNoesisThumbnailRenderer::RenderView(ThumbnailView, World, ViewportRect, BackBuffer);
+		ThumbnailRenderer.Render(World, ViewportRect, BackBuffer);
 	}
 }
 
 void UNoesisRive::DestroyThumbnailRenderData()
 {
-	ThumbnailView.Reset();
+	ThumbnailRenderer.Destroy();
 }
 #endif

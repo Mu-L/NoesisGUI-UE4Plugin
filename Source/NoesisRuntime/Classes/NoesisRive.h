@@ -12,6 +12,9 @@
 // Noesis includes
 #include "NoesisSDK.h"
 
+// NoesisRuntime includes
+#include "NoesisThumbnailRenderer.h"
+
 // RHI includes
 #include "RHI.h"
 #include "RHIResources.h"
@@ -53,6 +56,6 @@ class NOESISRUNTIME_API UNoesisRive : public UObject
 #endif
 
 #if WITH_EDITORONLY_DATA
-	Noesis::Ptr<Noesis::IView> ThumbnailView;
+	FNoesisThumbnailRenderer ThumbnailRenderer;
 #endif
 };

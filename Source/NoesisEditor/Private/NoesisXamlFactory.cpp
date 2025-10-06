@@ -371,17 +371,17 @@ UObject* UNoesisXamlFactory::FactoryCreateBinary(UClass* Class, UObject* Parent,
 		FPackageName::SplitLongPackageName(Parent->GetPathName(), PackageRoot, PackagePath, PackageName, false);
 
 		TArray<FString> ProjectAssetPathRootComponents;
-		SplitPath(PackageRoot + PackagePath, ProjectAssetPathRootComponents);
+		SplitPath(PackagePath, ProjectAssetPathRootComponents);
 		TArray<FString> ProjectURIRootComponents;
 		SplitPath(FPaths::GetPath(FullFilePath) + TEXT("/"), ProjectURIRootComponents);
 
-		while (ProjectAssetPathRootComponents.Last() == ProjectURIRootComponents.Last())
+		while (!ProjectAssetPathRootComponents.IsEmpty() && ProjectAssetPathRootComponents.Last() == ProjectURIRootComponents.Last())
 		{
 			ProjectAssetPathRootComponents.Pop();
 			ProjectURIRootComponents.Pop();
 		}
 
-		FString ProjectAssetPathRoot;
+		FString ProjectAssetPathRoot = PackageRoot;
 		JoinPath(ProjectAssetPathRootComponents, ProjectAssetPathRoot);
 		FString ProjectURIRoot;
 		JoinPath(ProjectURIRootComponents, ProjectURIRoot);

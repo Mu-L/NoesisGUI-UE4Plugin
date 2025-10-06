@@ -142,6 +142,11 @@ public class Noesis : ModuleRules
 			PublicDefinitions.Add("NS_STATIC_LIBRARY");
 			PublicAdditionalLibraries.Add(Path.Combine(NoesisBasePath, "Lib", "nx", "Noesis.a"));
 		}
+		else if (UnrealTargetPlatform.TryParse("Switch2", out Platform) && Target.Platform == Platform)
+		{
+			PublicDefinitions.Add("NS_STATIC_LIBRARY");
+			PublicAdditionalLibraries.Add(Path.Combine(NoesisBasePath, "Lib", "ounce", "Noesis.a"));
+		}
 	}
 
 	private void AddAndroidLibrary(string pluginPath, string src, string arch)

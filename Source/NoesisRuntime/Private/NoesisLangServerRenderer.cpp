@@ -86,9 +86,6 @@ void Noesis::NoesisLangServerRenderer::Capture(Noesis::UIElement* Content, uint3
 	(
 		[Renderer, View, Width, Height, RenderTime, WorldTime, Scene, &Contents](FRHICommandListImmediate& RHICmdList)
 		{
-			// Make sure dynamic material cached uniform expressions are up to date before doing any rendering
-			FMaterialRenderProxy::UpdateDeferredCachedUniformExpressions();
-
 			FNoesisRenderDevice* RenderDevice = FNoesisRenderDevice::Get();
 			RenderDevice->SetRHICmdList(&RHICmdList);
 			RenderDevice->SetWorldTime(WorldTime);
@@ -99,6 +96,10 @@ void Noesis::NoesisLangServerRenderer::Capture(Noesis::UIElement* Content, uint3
 			Renderer->UpdateRenderTree();
 			View->Update(RenderTime);
 			Renderer->UpdateRenderTree();
+
+			// Make sure dynamic material cached uniform expressions are up to date before doing any rendering
+			FMaterialRenderProxy::UpdateDeferredCachedUniformExpressions();
+
 			Renderer->RenderOffscreen();
 
 			const Noesis::Ptr<Noesis::RenderTarget> RenderTarget = RenderDevice->CreateRenderTarget("Preview", Width,

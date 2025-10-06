@@ -17,9 +17,18 @@
 
 struct FNoesisThumbnailRenderer
 {
-    static Noesis::Ptr<Noesis::IView> CreateView(Noesis::FrameworkElement* Content);
-    static void RenderView(Noesis::IView* View, UWorld* World, FIntRect ViewportRect,
-        const FTextureRHIRef& BackBuffer);
+	bool IsInitialized() const;
+
+	void Initialize(Noesis::FrameworkElement* Content);
+
+	void Render(UWorld* World, FIntRect ViewportRect, const FTextureRHIRef& BackBuffer) const;
+
+	void Destroy();
+
+	~FNoesisThumbnailRenderer();
+
+private:
+	Noesis::Ptr<Noesis::IView> View;
 };
 
 

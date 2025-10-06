@@ -20,11 +20,17 @@
 #include "NsGui/IRenderer.h"
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
-Noesis::Ptr<Noesis::IView> FNoesisThumbnailRenderer::CreateView(Noesis::FrameworkElement* Content)
+bool FNoesisThumbnailRenderer::IsInitialized() const
 {
-	Noesis::Ptr<Noesis::IView> View = Noesis::GUI::CreateView(Content);
-	Noesis::Ptr<Noesis::IRenderer> Renderer(View->GetRenderer());
+	return View != nullptr;
+}
 
+////////////////////////////////////////////////////////////////////////////////////////////////////
+void FNoesisThumbnailRenderer::Initialize(Noesis::FrameworkElement* Content)
+{
+	View = Noesis::GUI::CreateView(Content);
+
+	Noesis::Ptr<Noesis::IRenderer> Renderer(View->GetRenderer());
 	ENQUEUE_RENDER_COMMAND(FNoesisThumbnail_InitRenderer)
 	(
 		[Renderer](FRHICommandListImmediate& RHICmdList)
@@ -32,13 +38,10 @@ Noesis::Ptr<Noesis::IView> FNoesisThumbnailRenderer::CreateView(Noesis::Framewor
 			Renderer->Init(FNoesisRenderDevice::Get());
 		}
 	);
-
-	return View;
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
-void FNoesisThumbnailRenderer::RenderView(Noesis::IView* View, UWorld* World, FIntRect ViewportRect,
-    const FTextureRHIRef& BackBuffer)
+void FNoesisThumbnailRenderer::Render(UWorld* World, FIntRect ViewportRect, const FTextureRHIRef& BackBuffer) const
 {
 	if (View == nullptr || World == nullptr || BackBuffer == nullptr) return;
 
@@ -104,7 +107,7 @@ void FNoesisThumbnailRenderer::RenderView(Noesis::IView* View, UWorld* World, FI
 			NOESIS_BIND_DEBUG_TEXTURE_LABEL(DepthStencilTarget, Name);
 
 			FRHIRenderPassInfo RPInfo(ColorTarget, ERenderTargetActions::DontLoad_Store, DepthStencilTarget,
-				MakeDepthStencilTargetActions(ERenderTargetActions::DontLoad_DontStore, ERenderTargetActions::Clear_Store), FExclusiveDepthStencil::DepthNop_StencilWrite);
+				MakeDepthStencilTargetActions(ERenderTargetActions::DontLoad_DontStore, ERenderTargetActions::Clear_DontStore), FExclusiveDepthStencil::DepthNop_StencilWrite);
 
 			check(RHICmdList.IsOutsideRenderPass());
 			RHICmdList.BeginRenderPass(RPInfo, TEXT("NoesisThumbnail"));
@@ -119,6 +122,31 @@ void FNoesisThumbnailRenderer::RenderView(Noesis::IView* View, UWorld* World, FI
 			RHICmdList.EndRenderPass();
 		}
 	);
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+void FNoesisThumbnailRenderer::Destroy()
+{
+	if (View != nullptr)
+	{
+		Noesis::Ptr<Noesis::IRenderer> Renderer(View->GetRenderer());
+
+		ENQUEUE_RENDER_COMMAND(FNoesisThumbnail_ShutdownRenderer)
+		(
+			[Renderer](FRHICommandListImmediate& RHICmdList)
+			{
+				Renderer->Shutdown();
+			}
+		);
+
+		View.Reset();
+	}
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+FNoesisThumbnailRenderer::~FNoesisThumbnailRenderer()
+{
+	Destroy();
 }
 
 #endif

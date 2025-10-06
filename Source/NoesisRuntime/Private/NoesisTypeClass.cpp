@@ -59,6 +59,7 @@
 #include "NoesisRive.h"
 #include "NoesisXaml.h"
 #include "NoesisWorldUIComponent.h"
+#include "NoesisEnums.h"
 
 // Noesis includes
 #include "NoesisSDK.h"
@@ -401,6 +402,132 @@ struct NoesisTypeTraits<ETextFlowDirection>
 		return (Value == Noesis::FlowDirection_LeftToRight) ? ETextFlowDirection::LeftToRight : ETextFlowDirection::RightToLeft;
 	}
 	static bool Equals(const ETextFlowDirection& Left, const ETextFlowDirection& Right)
+	{
+		return Left == Right;
+	}
+};
+
+template<>
+struct NoesisTypeTraits<ENoesisVisibility>
+{
+	typedef Noesis::Visibility NoesisType;
+	static Noesis::Visibility ToNoesis(const ENoesisVisibility& Value)
+	{
+		return (Noesis::Visibility)(uint8)Value;
+	}
+	static ENoesisVisibility ToUnreal(const Noesis::Visibility& Value)
+	{
+		return (ENoesisVisibility)(uint8)Value;
+	}
+	static bool Equals(const ENoesisVisibility& Left, const ENoesisVisibility& Right)
+	{
+		return Left == Right;
+	}
+};
+
+template<>
+struct NoesisTypeTraits<ENoesisOrientation>
+{
+	typedef Noesis::Orientation NoesisType;
+	static Noesis::Orientation ToNoesis(const ENoesisOrientation& Value)
+	{
+		return (Noesis::Orientation)(uint8)Value;
+	}
+	static ENoesisOrientation ToUnreal(const Noesis::Orientation& Value)
+	{
+		return (ENoesisOrientation)(uint8)Value;
+	}
+	static bool Equals(const ENoesisOrientation& Left, const ENoesisOrientation& Right)
+	{
+		return Left == Right;
+	}
+};
+
+template<>
+struct NoesisTypeTraits<ENoesisHorizontalAlignment>
+{
+	typedef Noesis::HorizontalAlignment NoesisType;
+	static Noesis::HorizontalAlignment ToNoesis(const ENoesisHorizontalAlignment& Value)
+	{
+		return (Noesis::HorizontalAlignment)(uint8)Value;
+	}
+	static ENoesisHorizontalAlignment ToUnreal(const Noesis::HorizontalAlignment& Value)
+	{
+		return (ENoesisHorizontalAlignment)(uint8)Value;
+	}
+	static bool Equals(const ENoesisHorizontalAlignment& Left, const ENoesisHorizontalAlignment& Right)
+	{
+		return Left == Right;
+	}
+};
+
+template<>
+struct NoesisTypeTraits<ENoesisVerticalAlignment>
+{
+	typedef Noesis::VerticalAlignment NoesisType;
+	static Noesis::VerticalAlignment ToNoesis(const ENoesisVerticalAlignment& Value)
+	{
+		return (Noesis::VerticalAlignment)(uint8)Value;
+	}
+	static ENoesisVerticalAlignment ToUnreal(const Noesis::VerticalAlignment& Value)
+	{
+		return (ENoesisVerticalAlignment)(uint8)Value;
+	}
+	static bool Equals(const ENoesisVerticalAlignment& Left, const ENoesisVerticalAlignment& Right)
+	{
+		return Left == Right;
+	}
+};
+
+template<>
+struct NoesisTypeTraits<ENoesisTextAlignment>
+{
+	typedef Noesis::TextAlignment NoesisType;
+	static Noesis::TextAlignment ToNoesis(const ENoesisTextAlignment& Value)
+	{
+		return (Noesis::TextAlignment)(uint8)Value;
+	}
+	static ENoesisTextAlignment ToUnreal(const Noesis::TextAlignment& Value)
+	{
+		return (ENoesisTextAlignment)(uint8)Value;
+	}
+	static bool Equals(const ENoesisTextAlignment& Left, const ENoesisTextAlignment& Right)
+	{
+		return Left == Right;
+	}
+};
+
+template<>
+struct NoesisTypeTraits<ENoesisTextWrapping>
+{
+	typedef Noesis::TextWrapping NoesisType;
+	static Noesis::TextWrapping ToNoesis(const ENoesisTextWrapping& Value)
+	{
+		return (Noesis::TextWrapping)(uint8)Value;
+	}
+	static ENoesisTextWrapping ToUnreal(const Noesis::TextWrapping& Value)
+	{
+		return (ENoesisTextWrapping)(uint8)Value;
+	}
+	static bool Equals(const ENoesisTextWrapping& Left, const ENoesisTextWrapping& Right)
+	{
+		return Left == Right;
+	}
+};
+
+template<>
+struct NoesisTypeTraits<ENoesisTextTrimming>
+{
+	typedef Noesis::TextTrimming NoesisType;
+	static Noesis::TextTrimming ToNoesis(const ENoesisTextTrimming& Value)
+	{
+		return (Noesis::TextTrimming)(uint8)Value;
+	}
+	static ENoesisTextTrimming ToUnreal(const Noesis::TextTrimming& Value)
+	{
+		return (ENoesisTextTrimming)(uint8)Value;
+	}
+	static bool Equals(const ENoesisTextTrimming& Left, const ENoesisTextTrimming& Right)
 	{
 		return Left == Right;
 	}
@@ -872,7 +999,14 @@ void NoesisInitTypeTables()
 
 	EnumTypeInfos =
 	{
-		{StaticEnum<ETextFlowDirection>(), { &GenericGetter<ETextFlowDirection>, &GenericSetter<ETextFlowDirection>, &GenericGetType<ETextFlowDirection> }}
+		{StaticEnum<ETextFlowDirection>(), { &GenericGetter<ETextFlowDirection>, &GenericSetter<ETextFlowDirection>, &GenericGetType<ETextFlowDirection> }},
+		{StaticEnum<ENoesisVisibility>(), { &GenericGetter<ENoesisVisibility>, &GenericSetter<ENoesisVisibility>, &GenericGetType<ENoesisVisibility> }},
+		{StaticEnum<ENoesisOrientation>(), { &GenericGetter<ENoesisOrientation>, &GenericSetter<ENoesisOrientation>, &GenericGetType<ENoesisOrientation> }},
+		{StaticEnum<ENoesisHorizontalAlignment>(), { &GenericGetter<ENoesisHorizontalAlignment>, &GenericSetter<ENoesisHorizontalAlignment>, &GenericGetType<ENoesisHorizontalAlignment> }},
+		{StaticEnum<ENoesisVerticalAlignment>(), { &GenericGetter<ENoesisVerticalAlignment>, &GenericSetter<ENoesisVerticalAlignment>, &GenericGetType<ENoesisVerticalAlignment> }},
+		{StaticEnum<ENoesisTextAlignment>(), { &GenericGetter<ENoesisTextAlignment>, &GenericSetter<ENoesisTextAlignment>, &GenericGetType<ENoesisTextAlignment> }},
+		{StaticEnum<ENoesisTextWrapping>(), { &GenericGetter<ENoesisTextWrapping>, &GenericSetter<ENoesisTextWrapping>, &GenericGetType<ENoesisTextWrapping> }},
+		{StaticEnum<ENoesisTextTrimming>(), { &GenericGetter<ENoesisTextTrimming>, &GenericSetter<ENoesisTextTrimming>, &GenericGetType<ENoesisTextTrimming> }}
 	};
 
 	TypeInfos =
@@ -1276,7 +1410,7 @@ class NoesisArrayWrapper : public Noesis::BaseComponent, public Noesis::IList, p
 {
 public:
 	NoesisArrayWrapper(void* ArrayPtr, FArrayProperty* InArrayProperty)
-		: ArrayProperty(InArrayProperty), ArrayPointer(ArrayPtr)
+		: ArrayProperty(InArrayProperty), ArrayPointer(ArrayPtr), PreviousCount(INDEX_NONE)
 	{
 		check(ArrayProperty->Inner->GetOffset_ForDebug() == 0);
 		ArrayMap.Add(ArrayPointer, this);
@@ -2886,10 +3020,10 @@ void NoesisFillTypeClassForUClass(NoesisTypeClass* TypeClass, UClass* Class)
 				{
 					NoesisTypeProperty* TypeProperty = new NoesisTypePropertyObjectWrapperGetterSetter(PropertyId, OutParamType, Function, Setter);
 					TypeClass->AddProperty(TypeProperty);
+					}
 				}
 			}
 		}
-	}
 
 	for (TFieldIterator<FProperty> PropertyIt(Class, EFieldIteratorFlags::ExcludeSuper); PropertyIt; ++PropertyIt)
 	{

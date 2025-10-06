@@ -56,6 +56,7 @@ void FNoesisBlueprintCompilerContext::CopyTermDefaultsToDefaultObject(UObject* D
 		UNoesisBlueprint* NoesisBlueprint = CastChecked<UNoesisBlueprint>(Blueprint);
 		DefaultInstance->BaseXaml = NoesisBlueprint->BaseXaml;
 		DefaultInstance->EnablePPAA = NoesisBlueprint->EnablePPAA;
+		DefaultInstance->DPIScale = NoesisBlueprint->DPIScale;
 		DefaultInstance->TessellationQuality = NoesisBlueprint->TessellationQuality;
 		DefaultInstance->EnableKeyboard = NoesisBlueprint->EnableKeyboard;
 		DefaultInstance->EnableMouse = NoesisBlueprint->EnableMouse;

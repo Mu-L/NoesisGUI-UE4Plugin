@@ -17,7 +17,6 @@
 
 // NoesisRuntime includes
 #include "NoesisRuntimeModule.h"
-#include "NoesisThumbnailRenderer.h"
 
 UNoesisXaml::UNoesisXaml(const FObjectInitializer& ObjectInitializer)
 	: Super(ObjectInitializer)
@@ -118,23 +117,23 @@ FString UNoesisXaml::GetXamlUri() const
 #if WITH_EDITOR
 void UNoesisXaml::RenderThumbnail(FIntRect ViewportRect, const FTextureRHIRef& BackBuffer)
 {
-	if (ThumbnailView == nullptr)
+	if (!ThumbnailRenderer.IsInitialized())
 	{
 		Noesis::Ptr<Noesis::BaseComponent> Root = UNoesisXaml::LoadXaml();
 		Noesis::FrameworkElement* Content = Noesis::DynamicCast<Noesis::FrameworkElement*>(Root.GetPtr());
-		ThumbnailView = FNoesisThumbnailRenderer::CreateView(Content);
+		ThumbnailRenderer.Initialize(Content);
 	}
 
 	UWorld* World = GetWorld();
 	if (!IsValid(World)) World = GWorld.GetReference();
 	if (IsValid(World))
 	{
-		FNoesisThumbnailRenderer::RenderView(ThumbnailView, World, ViewportRect, BackBuffer);
+		ThumbnailRenderer.Render(World, ViewportRect, BackBuffer);
 	}
 }
 
 void UNoesisXaml::DestroyThumbnailRenderData()
 {
-	ThumbnailView.Reset();
+	ThumbnailRenderer.Destroy();
 }
 #endif

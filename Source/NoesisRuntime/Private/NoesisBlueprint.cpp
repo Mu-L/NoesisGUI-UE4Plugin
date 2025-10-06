@@ -13,6 +13,8 @@ UNoesisBlueprint::UNoesisBlueprint(const FObjectInitializer& ObjectInitializer)
 {
 	bRecompileOnLoad = false;
 
+	DPIScale = true;
+
 	TessellationQuality = ENoesisTessellationQuality::Medium;
 
 	EnableKeyboard = true;

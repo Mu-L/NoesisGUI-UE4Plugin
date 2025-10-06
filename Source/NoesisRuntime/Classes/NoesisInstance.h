@@ -150,6 +150,9 @@ class NOESISRUNTIME_API UNoesisInstance : public UUserWidget
 	bool EnablePPAA;
 
 	UPROPERTY(BlueprintReadWrite, Category = "NoesisGUI")
+	bool DPIScale;
+
+	UPROPERTY(BlueprintReadWrite, Category = "NoesisGUI")
 	ENoesisTessellationQuality TessellationQuality;
 
 	UPROPERTY(BlueprintReadWrite, Category = "NoesisGUI")

@@ -90,7 +90,7 @@ NoesisMediaPlayer::NoesisMediaPlayer(NoesisApp::MediaElement* Owner, const Noesi
 	}
 	else
 	{
-		NS_LOG("Can't open MediaSource '%s'", TCHAR_TO_UTF8(*VideoPath));
+		NS_LOG("Failed to open MediaSource '%s'. Copy video files into 'Content/Movies' in your Unreal project", TCHAR_TO_UTF8(*VideoPath));
 	}
 }
 
@@ -360,6 +360,5 @@ void NoesisMediaPlayer::OnMediaEvent(EMediaEvent Event)
 		{
 			break;
 		}
-		default: NS_ASSERT_UNREACHABLE;
 	}
 }
