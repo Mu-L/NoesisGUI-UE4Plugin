@@ -259,7 +259,7 @@ public:
 		{
 			bool HasStencil = DepthStencilTarget != nullptr;
 			EDepthStencilTargetActions DepthStencilTargetActions =
-				MakeDepthStencilTargetActions(ERenderTargetActions::DontLoad_DontStore, HasStencil ? ERenderTargetActions::Clear_DontStore : ERenderTargetActions::DontLoad_DontStore);
+				MakeDepthStencilTargetActions(ERenderTargetActions::DontLoad_DontStore, HasStencil ? ERenderTargetActions::DontLoad_DontStore : ERenderTargetActions::DontLoad_DontStore);
 
 			FRHIRenderPassInfo RPInfo(ColorTarget, ColorTargetActions, nullptr,
 				DepthStencilTarget, DepthStencilTargetActions, nullptr, FExclusiveDepthStencil::DepthNop_StencilWrite);
@@ -2817,12 +2817,12 @@ void FNoesisRenderDevice::SetRenderTarget(Noesis::RenderTarget* Surface)
 #if CSV_PROFILER
 	if (FCsvProfiler::Get()->IsCapturing_Renderthread())
 	{
-		SetRenderTargetBreadcrumb.Emplace(*RHICmdList, RHI_BREADCRUMB_DESC_FORWARD_VALUES(TEXT("SetRenderTarget"), TEXT(""), RHI_GPU_STAT_ARGS_NONE)());
+		SetRenderTargetBreadcrumb.Emplace(*RHICmdList, RHI_BREADCRUMB_DESC_FORWARD_VALUES(TEXT("SetRenderTarget"), nullptr, RHI_GPU_STAT_ARGS_NONE)());
 	}
 	else
 #endif
 	{
-		SetRenderTargetBreadcrumb.Emplace(*RHICmdList, RHI_BREADCRUMB_DESC_FORWARD_VALUES(TEXT("SetRenderTarget"), TEXT(""), RHI_GPU_STAT_ARGS_NONE)());
+		SetRenderTargetBreadcrumb.Emplace(*RHICmdList, RHI_BREADCRUMB_DESC_FORWARD_VALUES(TEXT("SetRenderTarget"), nullptr, RHI_GPU_STAT_ARGS_NONE)());
 	}
 #endif
 #endif
