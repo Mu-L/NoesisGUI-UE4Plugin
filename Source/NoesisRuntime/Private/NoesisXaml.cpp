@@ -29,13 +29,13 @@ Noesis::Ptr<Noesis::BaseComponent> UNoesisXaml::LoadXaml()
 		return nullptr;
 
 	FString Uri = GetXamlUri();
-	return Noesis::GUI::LoadXaml(TCHAR_TO_UTF8(*Uri));
+	return Noesis::GUI::LoadXaml((ANSICHAR*)StringCast<UTF8CHAR>(*Uri).Get());
 }
 
 void UNoesisXaml::LoadComponent(Noesis::BaseComponent* Component)
 {
 	FString Uri = GetXamlUri();
-	Noesis::GUI::LoadComponent(Component, TCHAR_TO_UTF8(*Uri));
+	Noesis::GUI::LoadComponent(Component, (ANSICHAR*)StringCast<UTF8CHAR>(*Uri).Get());
 }
 
 uint32 UNoesisXaml::GetContentHash() const
@@ -92,11 +92,15 @@ void UNoesisXaml::RegisterDependencies()
 	INoesisRuntimeModuleInterface& NoesisRuntime = INoesisRuntimeModuleInterface::Get();
 	for (auto Font : Fonts)
 	{
-		for (auto TypefaceEntry : Font->CompositeFont.DefaultTypeface.Fonts)
+		auto CompositeFont = Font->GetCompositeFont();
+		if (CompositeFont != nullptr)
 		{
-			const FFontData* FontData = &TypefaceEntry.Font;
-			const UFontFace* FontFace = Cast<UFontFace>(FontData->GetFontFaceAsset());
-			NoesisRuntime.RegisterFont(FontFace);
+			for (auto TypefaceEntry : CompositeFont->DefaultTypeface.Fonts)
+			{
+				const FFontData* FontData = &TypefaceEntry.Font;
+				const UFontFace* FontFace = Cast<UFontFace>(FontData->GetFontFaceAsset());
+				NoesisRuntime.RegisterFont(FontFace);
+			}
 		}
 	}
 

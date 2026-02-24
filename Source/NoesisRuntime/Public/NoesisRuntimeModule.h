@@ -13,11 +13,13 @@
 #if UE_VERSION_OLDER_THAN(5, 6, 0)
 #include "Stats/Stats2.h"
 #endif
+#include "HAL/Platform.h"
 
 // Noesis includes
 #include "NsCore/Log.h"
 
 DECLARE_LOG_CATEGORY_EXTERN(LogNoesis, VeryVerbose, All);
+DECLARE_LOG_CATEGORY_EXTERN(LogNoesisEngine, Error, All);
 
 DECLARE_STATS_GROUP(TEXT("Noesis"), STATGROUP_Noesis, STATCAT_Advanced);
 
@@ -29,9 +31,12 @@ NOESISRUNTIME_API void* NoesisRealloc(void* UserData, void* Ptr, size_t Size);
 NOESISRUNTIME_API void NoesisDealloc(void* UserData, void* Ptr);
 NOESISRUNTIME_API size_t NoesisAllocSize(void* UserData, void* Ptr);
 
-#if UE_BUILD_SHIPPING + UE_BUILD_SHIPPING_WITH_EDITOR == 0
-	NOESISRUNTIME_API void NoesisLog(const char* File, uint32_t Line, uint32_t Level, const char* Channel, const char* Format, ...);
-	#define NS_LOG(...) NoesisLog(__FILE__, __LINE__, NS_LOG_LEVEL_WARNING, "", __VA_ARGS__)
+#if NO_LOGGING == 0
+	#if PLATFORM_TCHAR_IS_UTF8CHAR
+		#define NS_LOG(...) UE_LOG(LogNoesis, Warning, TEXT("%s"), *TAnsiStringBuilder<256>().Appendf(__VA_ARGS__))
+	#else
+		#define NS_LOG(...) UE_LOG(LogNoesis, Warning, TEXT("%S"), *TAnsiStringBuilder<256>().Appendf(__VA_ARGS__))
+	#endif
 #else
 	#define NS_LOG(...)
 #endif

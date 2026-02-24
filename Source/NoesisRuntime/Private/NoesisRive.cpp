@@ -70,7 +70,7 @@ void UNoesisRive::RenderThumbnail(FIntRect ViewportRect, const FTextureRHIRef& B
 		FString Uri = PackageRoot.LeftChop(1) + TEXT(";component/") + PackagePath + PackageName + TEXT(".riv");
 
 		Noesis::Ptr<NoesisApp::RiveControl> Rive = Noesis::MakePtr<NoesisApp::RiveControl>();
-		Rive->SetSource(TCHAR_TO_UTF8(*Uri));
+		Rive->SetSource((ANSICHAR*)StringCast<UTF8CHAR>(*Uri).Get());
 		Rive->SetStretch(Noesis::Stretch_Uniform);
 
 		Noesis::Ptr<Noesis::Border> Root = Noesis::MakePtr<Noesis::Border>();

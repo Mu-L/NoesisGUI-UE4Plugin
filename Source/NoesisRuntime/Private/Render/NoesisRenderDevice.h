@@ -24,20 +24,26 @@
 #include "ProfilingDebugging/RealtimeGPUProfiler.h"
 
 #if !UE_BUILD_SHIPPING
-	#define NOESIS_BIND_DEBUG_LABEL(Resource, Name) \
+#if UE_VERSION_OLDER_THAN(5, 0, 0)
+	#define NOESIS_BIND_DEBUG_LABEL(RHICmdList, Resource, Name) \
 		RHIBindDebugLabelName(Resource, Name); \
 		Resource->SetName(Name);
 #else
-	#define NOESIS_BIND_DEBUG_LABEL(Resource, Name)
+#define NOESIS_BIND_DEBUG_LABEL(RHICmdList, Resource, Name) \
+		RHICmdList.BindDebugLabelName(Resource, Name); \
+		Resource->SetName(Name);
+#endif
+#else
+	#define NOESIS_BIND_DEBUG_LABEL(RHICmdList, Resource, Name)
 #endif
 
-#define NOESIS_BIND_DEBUG_TEXTURE_LABEL(Texture, Name) NOESIS_BIND_DEBUG_LABEL(Texture, Name)
+#define NOESIS_BIND_DEBUG_TEXTURE_LABEL(RHICmdList, Texture, Name) NOESIS_BIND_DEBUG_LABEL(RHICmdList, Texture, Name)
 
 #if UE_VERSION_OLDER_THAN(5, 0, 0)
 	// RHIBindDebugLabelName and SetName are not implemented for FVertexBufferRHIRef or FIndexBufferRHIRef
-	#define NOESIS_BIND_DEBUG_BUFFER_LABEL(Buffer, Name)
+	#define NOESIS_BIND_DEBUG_BUFFER_LABEL(RHICmdList, Buffer, Name)
 #else
-	#define NOESIS_BIND_DEBUG_BUFFER_LABEL(Buffer, Name) NOESIS_BIND_DEBUG_LABEL(Buffer, Name)
+	#define NOESIS_BIND_DEBUG_BUFFER_LABEL(RHICmdList, Buffer, Name) NOESIS_BIND_DEBUG_LABEL(RHICmdList, Buffer, Name)
 #endif
 
 class FNoesisRenderDevice : public Noesis::RenderDevice
@@ -87,6 +93,7 @@ public:
 	uint32 ViewLeft, ViewTop, ViewRight, ViewBottom;
 	bool IsWorldUI = false;
 	bool IsLinearColor = false;
+	bool AlphaMask = false;
 	float Gamma = 2.2f;
 	float Contrast = 1.0f;
 	FUniformBufferRHIRef* PixelShaderConstantBuffer0[Noesis::Shader::Count];
@@ -119,10 +126,10 @@ public:
 	void DestroyView();
 
 	template<class PixelShaderClass>
-	bool SetPatternMaterialParameters(const Noesis::Batch& Batch, TShaderRef<PixelShaderClass>& PixelShader);
+	bool SetPatternMaterialParameters(const Noesis::Batch& Batch, const FMaterialRenderProxy* MaterialProxy, const FMaterial* Material, const TShaderRef<PixelShaderClass>& PixelShader);
 
 	template<class PixelShaderClass>
-	bool SetPixelShaderParameters(const Noesis::Batch& Batch, TShaderRef<PixelShaderClass>& BasePixelShader, FUniformBufferRHIRef& PSUniformBuffer0, FUniformBufferRHIRef& PSUniformBuffer1);
+	bool SetPixelShaderParameters(const Noesis::Batch& Batch, const FMaterialRenderProxy* MaterialProxy, const FMaterial* Material, const TShaderRef<PixelShaderClass>& BasePixelShader, const FUniformBufferRHIRef& PSUniformBuffer0, const FUniformBufferRHIRef& PSUniformBuffer1);
 
 	// RenderDevice interface
 	virtual const Noesis::DeviceCaps& GetCaps() const override;

@@ -174,7 +174,7 @@ void FNoesisLangServerFontProvider::ScanFolder(const Noesis::Uri& Folder)
 				FString Filename = FPaths::GetCleanFilename(FilenameOrDirectory);
 				if (Extension == TEXT("ttf") || Extension == TEXT("otf") || Extension == TEXT("ttc"))
 				{
-					Provider->RegisterFont(Folder, TCHAR_TO_UTF8(*Filename));
+					Provider->RegisterFont(Folder, (ANSICHAR*)StringCast<UTF8CHAR>(*Filename).Get());
 				}
 			}
 
@@ -188,7 +188,7 @@ void FNoesisLangServerFontProvider::ScanFolder(const Noesis::Uri& Folder)
 
 	IPlatformFile& PlatformFile = FPlatformFileManager::Get().GetPlatformFile();
 	ScanFolderForFonts Visitor(Folder, this);
-	PlatformFile.IterateDirectory(UTF8_TO_TCHAR(Path.Str()), Visitor);
+	PlatformFile.IterateDirectory(StringCast<TCHAR>((UTF8CHAR*)(Path.Str())).Get(), Visitor);
 }
 
 Noesis::Ptr<Noesis::Stream> FNoesisLangServerFontProvider::OpenFont(const  Noesis::Uri& folder, const char* filename) const

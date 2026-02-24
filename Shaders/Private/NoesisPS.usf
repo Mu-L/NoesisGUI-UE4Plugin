@@ -459,10 +459,10 @@ Out NoesisPS(in In i)
         #else
             half4 paint = Texture2DSample(patternTex, patternSampler, i.uv0);
         #endif
-        #if PATTERN_SRGB
+        #if !IS_LINEAR_COLOR && PATTERN_LINEAR
             paint.xyz = LinearToSrgb(paint.xyz);
         #endif
-        #if PATTERN_LINEAR
+        #if IS_LINEAR_COLOR && !PATTERN_LINEAR
             paint.xyz = sRGBToLinear(paint.xyz);
         #endif
         #if PATTERN_IGNORE_ALPHA
@@ -569,6 +569,13 @@ Out NoesisPS(in In i)
         float contrastMidpoint = 0.25; //TODO We may want to make the midpoint configurable so that users can pick a different one, based on the overall saturation of their UI.
         o.color.rgb = saturate(((o.color.rgb - contrastMidpoint) * gammaAndAlphaValues.w) + contrastMidpoint);
         o.color.rgb = ApplyGammaCorrection(o.color.rgb, gammaAndAlphaValues.x);
+    #endif
+
+    #if ALPHA_MASK
+        if (o.color.a == 0.0)
+            discard;
+ 
+        o.color = half4(0.0, 0.0, 0.0, 0.0);
     #endif
 
     return o;

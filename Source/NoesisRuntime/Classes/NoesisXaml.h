@@ -31,28 +31,28 @@ class NOESISRUNTIME_API UNoesisXaml : public UObject
 	TArray<uint8> XamlText;
 
 	UPROPERTY()
-	TArray<UNoesisXaml*> Xamls;
+	TArray<TObjectPtr<UNoesisXaml>> Xamls;
 
 	UPROPERTY()
-	TArray<class UTexture2D*> Textures;
+	TArray<TObjectPtr<class UTexture2D>> Textures;
 
 	UPROPERTY()
-	TArray<class UFont*> Fonts;
+	TArray<TObjectPtr<class UFont>> Fonts;
 
 	UPROPERTY()
-	TArray<class UFontFace*> FontFaces;
+	TArray<TObjectPtr<class UFontFace>> FontFaces;
 
 	UPROPERTY()
-	TArray<class USoundWave*> Sounds;
+	TArray<TObjectPtr<class USoundWave>> Sounds;
 
 	UPROPERTY()
-	TArray<class UMediaSource*> Videos;
+	TArray<TObjectPtr<class UMediaSource>> Videos;
 
 	UPROPERTY()
-	TArray<class UNoesisRive*> Rives;
+	TArray<TObjectPtr<class UNoesisRive>> Rives;
 
 	UPROPERTY()
-	TArray<class UMaterialInterface*> Materials;
+	TArray<TObjectPtr<class UMaterialInterface>> Materials;
 
 	UPROPERTY()
 	TArray<FText> Texts;
@@ -63,7 +63,7 @@ class NOESISRUNTIME_API UNoesisXaml : public UObject
 
 #if WITH_EDITORONLY_DATA
 	UPROPERTY(VisibleAnywhere, Instanced, Category=ImportSettings)
-	class UAssetImportData* AssetImportData;
+	TObjectPtr<class UAssetImportData> AssetImportData;
 
 	// UObject interface
 	virtual void PostInitProperties() override;

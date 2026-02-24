@@ -98,7 +98,7 @@ void FNoesisXamlProvider::OnXamlChanged(UNoesisXaml* Xaml)
 	{
 		for (const FString& Name : *Names)
 		{
-			RaiseXamlChanged(TCHAR_TO_UTF8(*Name));
+			RaiseXamlChanged((ANSICHAR*)StringCast<UTF8CHAR>(*Name).Get());
 		}
 	}
 #endif
@@ -143,7 +143,7 @@ void FNoesisTextureProvider::OnTextureChanged(UTexture2D* Texture)
 #if WITH_EDITOR
 	if (FString* Name = NameMap.Find(Texture))
 	{
-		RaiseTextureChanged(TCHAR_TO_UTF8(**Name));
+		RaiseTextureChanged((ANSICHAR*)StringCast<UTF8CHAR>(**Name).Get());
 	}
 #endif
 }
@@ -192,7 +192,7 @@ void FNoesisFontProvider::RegisterFont(const UFontFace* FontFace)
 
 		FString Folder = PackageRoot.LeftChop(1) + TEXT(";component/") + PackagePath;
 
-		Noesis::CachedFontProvider::RegisterFont(TCHARToNsString(*Folder).Str(), TCHARToNsString(*PackageName).Str());
+		Noesis::CachedFontProvider::RegisterFont((ANSICHAR*)StringCast<UTF8CHAR>(*Folder).Get(), (ANSICHAR*)StringCast<UTF8CHAR>(*PackageName).Get());
 	}
 }
 

@@ -5,8 +5,15 @@
 
 #include "NoesisRenderDevice.h"
 
+// Core includes
+#include "Algo/AllOf.h"
+#include "CoreGlobals.h"
+#include "Misc/ConfigCacheIni.h"
+
 // Engine includes
 #include "EngineModule.h"
+#include "LocalVertexFactory.h"
+#include "Engine/RendererSettings.h"
 #include "Engine/Texture2D.h"
 #include "Engine/TextureRenderTarget2D.h"
 #include "Rendering/Texture2DResource.h"
@@ -45,6 +52,7 @@
 #include "SceneRendering.h"
 
 // NoesisRuntime includes
+#include "NoesisRuntimeModule.h"
 #include "Render/NoesisShaders.h"
 #include "NoesisSettings.h"
 
@@ -192,13 +200,25 @@ private:
 #if UE_VERSION_OLDER_THAN(5, 0, 0)
 typedef FTicker FTSTicker;
 #endif
-
 class FNoesisMaterial
 {
 public:
 	FNoesisMaterial(UMaterialInterface* InMaterial)
 		: MaterialPtr(InMaterial)
 	{
+#if !UE_VERSION_OLDER_THAN(5, 6, 0) && UE_WITH_PSO_PRECACHING
+		if (GetPSOPrecacheProxyCreationStrategy() == EPSOPrecacheProxyCreationStrategy::DelayUntilPSOPrecached)
+		{
+			FPSOPrecacheParams DefaultParams;
+			FPSOPrecacheVertexFactoryDataList VertexFactoryDataList;
+			VertexFactoryDataList.Emplace(&FLocalVertexFactory::StaticType);
+
+			//Set high priority to precache Noesis materials as soon as possible, typically UI materials are needed right away and compile quickly.
+			//UMaterial::PostLoad does this depending on platform, but we need the MaterialPSOPrecacheRequestIDs to know if it's done
+			//We purposely don't release MaterialPSOPrecacheRequestIDs since they aren't valid after a call ClearMaterialPSORequests() and actually releasing them doesn't really do anything
+			GraphEvents = InMaterial->PrecachePSOs(VertexFactoryDataList, DefaultParams, EPSOPrecachePriority::High, MaterialPSOPrecacheRequestIDs);
+		}
+#endif
 	}
 
 	FMaterialRenderProxy* GetRenderProxy() const
@@ -211,8 +231,35 @@ public:
 		return nullptr;
 	}
 
+#if !UE_VERSION_OLDER_THAN(5, 6, 0) && UE_WITH_PSO_PRECACHING
+	bool IsPrecachePendingAndBoost()
+	{
+		if (!MaterialPtr.IsValid() || Algo::AllOf(GraphEvents, [](const FGraphEventRef& Event) { return Event->IsComplete(); }))
+		{
+			MaterialPSOPrecacheRequestIDs.Empty();
+			GraphEvents.Empty();
+		}
+
+		if (!GraphEvents.IsEmpty())
+		{
+			if (!MaterialPSOPrecacheRequestIDs.IsEmpty())
+			{
+				BoostPSOPriority(EPSOPrecachePriority::Highest, MaterialPSOPrecacheRequestIDs);
+				MaterialPSOPrecacheRequestIDs.Empty();
+			}
+			return true;
+		}
+
+		return false;
+	}
+#endif
+
 private:
 	TWeakObjectPtr<UMaterialInterface> MaterialPtr;
+#if !UE_VERSION_OLDER_THAN(5, 6, 0) && UE_WITH_PSO_PRECACHING
+	TArray<FMaterialPSOPrecacheRequestID> MaterialPSOPrecacheRequestIDs;
+	FGraphEventArray GraphEvents;
+#endif
 };
 
 class FNoesisRenderTarget : public Noesis::RenderTarget
@@ -348,125 +395,6 @@ private:
 static const TCHAR* NoesisGlobalPSOCollectorName = TEXT("NoesisGlobalPSOCollector");
 static const TCHAR* NoesisMaterialPSOCollectorName = TEXT("NoesisMaterialPSOCollector");
 
-struct VSFlags
-{
-	enum Enum : uint8
-	{
-		None = 0x0,
-		Stereo = 0x1,
-		LinearColor = 0x2,
-		Count = 0x4
-	};
-};
-
-static TShaderRef<FNoesisVSBase> GetVertexShader(Noesis::Shader::Vertex::Enum VertexShader, uint8 Flags)
-{
-	static TShaderRef<FNoesisVSBase> VertexShaders[VSFlags::Count][Noesis::Shader::Vertex::Count] =
-	{
-		// !LinearColor, !Stereo
-		{
-			TShaderMapRef<FNoesisPosVS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPosColorVS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPosTex0VS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPosTex0RectVS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPosTex0RectTileVS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPosColorCoverageVS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPosTex0CoverageVS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPosTex0CoverageRectVS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPosTex0CoverageRectTileVS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPosColorTex1SDFVS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPosTex0Tex1SDFVS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPosTex0Tex1RectSDFVS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPosTex0Tex1RectTileSDFVS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPosColorTex1VS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPosTex0Tex1VS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPosTex0Tex1RectVS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPosTex0Tex1RectTileVS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPosColorTex0Tex1VS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPosTex0Tex1DownsampleVS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPosColorTex1RectVS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPosColorTex0RectImagePosVS>(GetGlobalShaderMap(GMaxRHIFeatureLevel))
-		},
-
-		// !LinearColor, Stereo
-		{
-			TShaderMapRef<FNoesisPosStereoVS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPosColorStereoVS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPosTex0StereoVS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPosTex0RectStereoVS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPosTex0RectTileStereoVS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPosColorCoverageStereoVS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPosTex0CoverageStereoVS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPosTex0CoverageRectStereoVS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPosTex0CoverageRectTileStereoVS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPosColorTex1SDFStereoVS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPosTex0Tex1SDFStereoVS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPosTex0Tex1RectSDFStereoVS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPosTex0Tex1RectTileSDFStereoVS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPosColorTex1StereoVS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPosTex0Tex1StereoVS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPosTex0Tex1RectStereoVS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPosTex0Tex1RectTileStereoVS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPosColorTex0Tex1StereoVS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPosTex0Tex1DownsampleStereoVS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPosColorTex1RectStereoVS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPosColorTex0RectImagePosStereoVS>(GetGlobalShaderMap(GMaxRHIFeatureLevel))
-		},
-
-		// LinearColor, !Stereo
-		{
-			TShaderMapRef<FNoesisPosVS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPosLinearColorVS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPosTex0VS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPosTex0RectVS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPosTex0RectTileVS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPosLinearColorCoverageVS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPosTex0CoverageVS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPosTex0CoverageRectVS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPosTex0CoverageRectTileVS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPosLinearColorTex1SDFVS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPosTex0Tex1SDFVS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPosTex0Tex1RectSDFVS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPosTex0Tex1RectTileSDFVS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPosLinearColorTex1VS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPosTex0Tex1VS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPosTex0Tex1RectVS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPosTex0Tex1RectTileVS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPosLinearColorTex0Tex1VS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPosTex0Tex1DownsampleVS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPosLinearColorTex1RectVS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPosLinearColorTex0RectImagePosVS>(GetGlobalShaderMap(GMaxRHIFeatureLevel))
-		},
-
-		// LinearColor, Stereo
-		{
-			TShaderMapRef<FNoesisPosStereoVS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPosLinearColorStereoVS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPosTex0StereoVS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPosTex0RectStereoVS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPosTex0RectTileStereoVS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPosLinearColorCoverageStereoVS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPosTex0CoverageStereoVS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPosTex0CoverageRectStereoVS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPosTex0CoverageRectTileStereoVS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPosLinearColorTex1SDFStereoVS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPosTex0Tex1SDFStereoVS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPosTex0Tex1RectSDFStereoVS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPosTex0Tex1RectTileSDFStereoVS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPosLinearColorTex1StereoVS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPosTex0Tex1StereoVS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPosTex0Tex1RectStereoVS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPosTex0Tex1RectTileStereoVS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPosLinearColorTex0Tex1StereoVS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPosTex0Tex1DownsampleStereoVS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPosLinearColorTex1RectStereoVS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPosLinearColorTex0RectImagePosStereoVS>(GetGlobalShaderMap(GMaxRHIFeatureLevel))
-		}
-	};
-
-	return VertexShaders[Flags][VertexShader];
-}
-
 FRHIVertexDeclaration* GetVertexDelcaration(Noesis::Shader::Vertex::Format::Enum VertexShaderFormat)
 {
 	static FVertexDeclarationRHIRef VertexDeclarations[Noesis::Shader::Vertex::Format::Count] =
@@ -492,1480 +420,23 @@ FRHIVertexDeclaration* GetVertexDelcaration(Noesis::Shader::Vertex::Format::Enum
 	return VertexDeclarations[VertexShaderFormat];
 }
 
-struct PSFlags
+template <typename T>
+static TShaderRef<T> GetMaterialPixelShader(const FMaterial& Material, const typename T::FPermutationDomain& Permutation)
 {
-	enum Enum : uint8
-	{
-		None = 0x0,
-		LinearColor = 0x1,
-		LinearPattern = 0x2,
-		GammaCorrection = 0x4,
-		IgnoreAlpha = 0x8,
-		Count = 0x10
-	};
-};
-
-TShaderRef<FNoesisPSBase> GetGlobalPixelShader(Noesis::Shader::Enum Shader, uint8 Flags)
-{
-	TShaderRef<FNoesisPSBase> PixelShaders[PSFlags::Count][Noesis::Shader::Count] =
-	{
-		// !IgnoreAlpha, !GammaCorrection, !LinearPattern, !LinearColor
-		{
-			TShaderMapRef<FNoesisRgbaPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisMaskPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisClearPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathSolidPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathLinearPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathRadialPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathPatternPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathPatternClampPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathPatternRepeatPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathPatternMirrorUPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathPatternMirrorVPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathPatternMirrorPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathAASolidPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathAALinearPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathAARadialPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathAAPatternPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathAAPatternClampPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathAAPatternRepeatPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathAAPatternMirrorUPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathAAPatternMirrorVPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathAAPatternMirrorPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFSolidPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFLinearPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFRadialPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFPatternPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFPatternClampPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFPatternRepeatPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFPatternMirrorUPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFPatternMirrorVPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFPatternMirrorPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFLCDSolidPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFLCDLinearPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFLCDRadialPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFLCDPatternPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFLCDPatternClampPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFLCDPatternRepeatPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFLCDPatternMirrorUPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFLCDPatternMirrorVPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFLCDPatternMirrorPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisOpacitySolidPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisOpacityLinearPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisOpacityRadialPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisOpacityPatternPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisOpacityPatternClampPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisOpacityPatternRepeatPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisOpacityPatternMirrorUPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisOpacityPatternMirrorVPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisOpacityPatternMirrorPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisUpsamplePS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisDownsamplePS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisShadowPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisBlurPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderRef<FNoesisPSBase>()
-		},
-
-		// !IgnoreAlpha, !GammaCorrection, !LinearPattern, LinearColor
-		{
-			TShaderMapRef<FNoesisRgbaPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisMaskPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisClearPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathSolidPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathLinearPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathRadialPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathPatternLinearPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathPatternClampLinearPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathPatternRepeatLinearPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathPatternMirrorULinearPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathPatternMirrorVLinearPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathPatternMirrorLinearPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathAASolidPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathAALinearPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathAARadialPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathAAPatternLinearPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathAAPatternClampLinearPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathAAPatternRepeatLinearPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathAAPatternMirrorULinearPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathAAPatternMirrorVLinearPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathAAPatternMirrorLinearPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFSolidPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFLinearPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFRadialPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFPatternLinearPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFPatternClampLinearPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFPatternRepeatLinearPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFPatternMirrorULinearPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFPatternMirrorVLinearPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFPatternMirrorLinearPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFLCDSolidPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFLCDLinearPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFLCDRadialPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFLCDPatternLinearPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFLCDPatternClampLinearPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFLCDPatternRepeatLinearPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFLCDPatternMirrorULinearPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFLCDPatternMirrorVLinearPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFLCDPatternMirrorLinearPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisOpacitySolidPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisOpacityLinearPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisOpacityRadialPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisOpacityPatternLinearPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisOpacityPatternClampLinearPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisOpacityPatternRepeatLinearPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisOpacityPatternMirrorULinearPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisOpacityPatternMirrorVLinearPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisOpacityPatternMirrorLinearPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisUpsamplePS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisDownsamplePS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisShadowPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisBlurPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderRef<FNoesisPSBase>()
-		},
-
-		// !IgnoreAlpha, !GammaCorrection, LinearPattern, !LinearColor
-		{
-			TShaderMapRef<FNoesisRgbaPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisMaskPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisClearPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathSolidPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathLinearPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathRadialPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathPatternSRGBPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathPatternClampSRGBPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathPatternRepeatSRGBPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathPatternMirrorUSRGBPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathPatternMirrorVSRGBPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathPatternMirrorSRGBPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathAASolidPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathAALinearPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathAARadialPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathAAPatternSRGBPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathAAPatternClampSRGBPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathAAPatternRepeatSRGBPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathAAPatternMirrorUSRGBPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathAAPatternMirrorVSRGBPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathAAPatternMirrorSRGBPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFSolidPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFLinearPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFRadialPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFPatternSRGBPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFPatternClampSRGBPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFPatternRepeatSRGBPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFPatternMirrorUSRGBPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFPatternMirrorVSRGBPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFPatternMirrorSRGBPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFLCDSolidPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFLCDLinearPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFLCDRadialPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFLCDPatternSRGBPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFLCDPatternClampSRGBPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFLCDPatternRepeatSRGBPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFLCDPatternMirrorUSRGBPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFLCDPatternMirrorVSRGBPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFLCDPatternMirrorSRGBPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisOpacitySolidPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisOpacityLinearPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisOpacityRadialPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisOpacityPatternSRGBPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisOpacityPatternClampSRGBPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisOpacityPatternRepeatSRGBPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisOpacityPatternMirrorUSRGBPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisOpacityPatternMirrorVSRGBPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisOpacityPatternMirrorSRGBPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisUpsamplePS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisDownsamplePS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisShadowPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisBlurPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderRef<FNoesisPSBase>()
-		},
-
-		// !IgnoreAlpha, !GammaCorrection, LinearPattern, LinearColor
-		{
-			TShaderMapRef<FNoesisRgbaPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisMaskPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisClearPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathSolidPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathLinearPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathRadialPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathPatternPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathPatternClampPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathPatternRepeatPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathPatternMirrorUPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathPatternMirrorVPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathPatternMirrorPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathAASolidPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathAALinearPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathAARadialPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathAAPatternPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathAAPatternClampPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathAAPatternRepeatPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathAAPatternMirrorUPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathAAPatternMirrorVPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathAAPatternMirrorPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFSolidPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFLinearPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFRadialPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFPatternPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFPatternClampPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFPatternRepeatPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFPatternMirrorUPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFPatternMirrorVPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFPatternMirrorPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFLCDSolidPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFLCDLinearPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFLCDRadialPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFLCDPatternPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFLCDPatternClampPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFLCDPatternRepeatPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFLCDPatternMirrorUPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFLCDPatternMirrorVPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFLCDPatternMirrorPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisOpacitySolidPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisOpacityLinearPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisOpacityRadialPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisOpacityPatternPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisOpacityPatternClampPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisOpacityPatternRepeatPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisOpacityPatternMirrorUPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisOpacityPatternMirrorVPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisOpacityPatternMirrorPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisUpsamplePS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisDownsamplePS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisShadowPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisBlurPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderRef<FNoesisPSBase>()
-		},
-
-		// !IgnoreAlpha, GammaCorrection, !LinearPattern, !LinearColor
-		{
-			TShaderMapRef<FNoesisRgbaGammaCorrectionPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisMaskGammaCorrectionPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisClearGammaCorrectionPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathSolidGammaCorrectionPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathLinearGammaCorrectionPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathRadialGammaCorrectionPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathPatternGammaCorrectionPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathPatternClampGammaCorrectionPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathPatternRepeatGammaCorrectionPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathPatternMirrorUGammaCorrectionPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathPatternMirrorVGammaCorrectionPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathPatternMirrorGammaCorrectionPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathAASolidGammaCorrectionPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathAALinearGammaCorrectionPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathAARadialGammaCorrectionPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathAAPatternGammaCorrectionPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathAAPatternClampGammaCorrectionPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathAAPatternRepeatGammaCorrectionPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathAAPatternMirrorUGammaCorrectionPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathAAPatternMirrorVGammaCorrectionPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathAAPatternMirrorGammaCorrectionPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFSolidGammaCorrectionPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFLinearGammaCorrectionPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFRadialGammaCorrectionPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFPatternGammaCorrectionPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFPatternClampGammaCorrectionPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFPatternRepeatGammaCorrectionPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFPatternMirrorUGammaCorrectionPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFPatternMirrorVGammaCorrectionPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFPatternMirrorGammaCorrectionPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFLCDSolidGammaCorrectionPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFLCDLinearGammaCorrectionPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFLCDRadialGammaCorrectionPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFLCDPatternGammaCorrectionPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFLCDPatternClampGammaCorrectionPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFLCDPatternRepeatGammaCorrectionPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFLCDPatternMirrorUGammaCorrectionPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFLCDPatternMirrorVGammaCorrectionPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFLCDPatternMirrorGammaCorrectionPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisOpacitySolidGammaCorrectionPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisOpacityLinearGammaCorrectionPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisOpacityRadialGammaCorrectionPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisOpacityPatternGammaCorrectionPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisOpacityPatternClampGammaCorrectionPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisOpacityPatternRepeatGammaCorrectionPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisOpacityPatternMirrorUGammaCorrectionPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisOpacityPatternMirrorVGammaCorrectionPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisOpacityPatternMirrorGammaCorrectionPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisUpsampleGammaCorrectionPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisDownsampleGammaCorrectionPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisShadowGammaCorrectionPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisBlurGammaCorrectionPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderRef<FNoesisPSBase>()
-		},
-
-		// !IgnoreAlpha, GammaCorrection, !LinearPattern, LinearColor
-		{
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>()
-		},
-
-		// !IgnoreAlpha, GammaCorrection, LinearPattern, !LinearColor
-		{
-			TShaderMapRef<FNoesisRgbaGammaCorrectionPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisMaskGammaCorrectionPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisClearGammaCorrectionPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathSolidGammaCorrectionPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathLinearGammaCorrectionPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathRadialGammaCorrectionPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathPatternSRGBGammaCorrectionPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathPatternClampSRGBGammaCorrectionPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathPatternRepeatSRGBGammaCorrectionPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathPatternMirrorUSRGBGammaCorrectionPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathPatternMirrorVSRGBGammaCorrectionPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathPatternMirrorSRGBGammaCorrectionPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathAASolidGammaCorrectionPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathAALinearGammaCorrectionPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathAARadialGammaCorrectionPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathAAPatternSRGBGammaCorrectionPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathAAPatternClampSRGBGammaCorrectionPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathAAPatternRepeatSRGBGammaCorrectionPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathAAPatternMirrorUSRGBGammaCorrectionPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathAAPatternMirrorVSRGBGammaCorrectionPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathAAPatternMirrorSRGBGammaCorrectionPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFSolidGammaCorrectionPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFLinearGammaCorrectionPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFRadialGammaCorrectionPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFPatternSRGBGammaCorrectionPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFPatternClampSRGBGammaCorrectionPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFPatternRepeatSRGBGammaCorrectionPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFPatternMirrorUSRGBGammaCorrectionPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFPatternMirrorVSRGBGammaCorrectionPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFPatternMirrorSRGBGammaCorrectionPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFLCDSolidGammaCorrectionPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFLCDLinearGammaCorrectionPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFLCDRadialGammaCorrectionPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFLCDPatternSRGBGammaCorrectionPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFLCDPatternClampSRGBGammaCorrectionPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFLCDPatternRepeatSRGBGammaCorrectionPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFLCDPatternMirrorUSRGBGammaCorrectionPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFLCDPatternMirrorVSRGBGammaCorrectionPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFLCDPatternMirrorSRGBGammaCorrectionPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisOpacitySolidGammaCorrectionPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisOpacityLinearGammaCorrectionPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisOpacityRadialGammaCorrectionPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisOpacityPatternSRGBGammaCorrectionPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisOpacityPatternClampSRGBGammaCorrectionPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisOpacityPatternRepeatSRGBGammaCorrectionPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisOpacityPatternMirrorUSRGBGammaCorrectionPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisOpacityPatternMirrorVSRGBGammaCorrectionPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisOpacityPatternMirrorSRGBGammaCorrectionPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisUpsampleGammaCorrectionPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisDownsampleGammaCorrectionPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisShadowGammaCorrectionPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisBlurGammaCorrectionPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderRef<FNoesisPSBase>()
-		},
-
-		// !IgnoreAlpha, GammaCorrection, LinearPattern, LinearColor
-		{
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>()
-		},
-
-		// IgnoreAlpha, !GammaCorrection, !LinearPattern, !LinearColor
-		{
-			TShaderMapRef<FNoesisRgbaPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisMaskPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisClearPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathSolidPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathLinearPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathRadialPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathPatternIgnoreAlphaPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathPatternClampIgnoreAlphaPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathPatternRepeatIgnoreAlphaPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathPatternMirrorUIgnoreAlphaPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathPatternMirrorVIgnoreAlphaPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathPatternMirrorIgnoreAlphaPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathAASolidPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathAALinearPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathAARadialPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathAAPatternIgnoreAlphaPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathAAPatternClampIgnoreAlphaPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathAAPatternRepeatIgnoreAlphaPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathAAPatternMirrorUIgnoreAlphaPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathAAPatternMirrorVIgnoreAlphaPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathAAPatternMirrorIgnoreAlphaPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFSolidPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFLinearPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFRadialPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFPatternIgnoreAlphaPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFPatternClampIgnoreAlphaPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFPatternRepeatIgnoreAlphaPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFPatternMirrorUIgnoreAlphaPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFPatternMirrorVIgnoreAlphaPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFPatternMirrorIgnoreAlphaPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFLCDSolidPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFLCDLinearPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFLCDRadialPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFLCDPatternIgnoreAlphaPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFLCDPatternClampIgnoreAlphaPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFLCDPatternRepeatIgnoreAlphaPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFLCDPatternMirrorUIgnoreAlphaPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFLCDPatternMirrorVIgnoreAlphaPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFLCDPatternMirrorIgnoreAlphaPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisOpacitySolidPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisOpacityLinearPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisOpacityRadialPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisOpacityPatternIgnoreAlphaPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisOpacityPatternClampIgnoreAlphaPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisOpacityPatternRepeatIgnoreAlphaPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisOpacityPatternMirrorUIgnoreAlphaPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisOpacityPatternMirrorVIgnoreAlphaPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisOpacityPatternMirrorIgnoreAlphaPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisUpsamplePS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisDownsamplePS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisShadowPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisBlurPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderRef<FNoesisPSBase>()
-		},
-
-		// IgnoreAlpha, !GammaCorrection, !LinearPattern, LinearColor
-		{
-			TShaderMapRef<FNoesisRgbaPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisMaskPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisClearPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathSolidPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathLinearPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathRadialPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathPatternLinearIgnoreAlphaPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathPatternClampLinearIgnoreAlphaPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathPatternRepeatLinearIgnoreAlphaPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathPatternMirrorULinearIgnoreAlphaPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathPatternMirrorVLinearIgnoreAlphaPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathPatternMirrorLinearIgnoreAlphaPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathAASolidPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathAALinearPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathAARadialPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathAAPatternLinearIgnoreAlphaPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathAAPatternClampLinearIgnoreAlphaPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathAAPatternRepeatLinearIgnoreAlphaPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathAAPatternMirrorULinearIgnoreAlphaPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathAAPatternMirrorVLinearIgnoreAlphaPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathAAPatternMirrorLinearIgnoreAlphaPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFSolidPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFLinearPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFRadialPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFPatternLinearIgnoreAlphaPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFPatternClampLinearIgnoreAlphaPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFPatternRepeatLinearIgnoreAlphaPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFPatternMirrorULinearIgnoreAlphaPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFPatternMirrorVLinearIgnoreAlphaPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFPatternMirrorLinearIgnoreAlphaPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFLCDSolidPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFLCDLinearPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFLCDRadialPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFLCDPatternLinearIgnoreAlphaPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFLCDPatternClampLinearIgnoreAlphaPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFLCDPatternRepeatLinearIgnoreAlphaPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFLCDPatternMirrorULinearIgnoreAlphaPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFLCDPatternMirrorVLinearIgnoreAlphaPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFLCDPatternMirrorLinearIgnoreAlphaPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisOpacitySolidPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisOpacityLinearPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisOpacityRadialPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisOpacityPatternLinearIgnoreAlphaPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisOpacityPatternClampLinearIgnoreAlphaPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisOpacityPatternRepeatLinearIgnoreAlphaPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisOpacityPatternMirrorULinearIgnoreAlphaPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisOpacityPatternMirrorVLinearIgnoreAlphaPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisOpacityPatternMirrorLinearIgnoreAlphaPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisUpsamplePS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisDownsamplePS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisShadowPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisBlurPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderRef<FNoesisPSBase>()
-		},
-
-		// IgnoreAlpha, !GammaCorrection, LinearPattern, !LinearColor
-		{
-			TShaderMapRef<FNoesisRgbaPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisMaskPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisClearPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathSolidPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathLinearPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathRadialPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathPatternSRGBIgnoreAlphaPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathPatternClampSRGBIgnoreAlphaPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathPatternRepeatSRGBIgnoreAlphaPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathPatternMirrorUSRGBIgnoreAlphaPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathPatternMirrorVSRGBIgnoreAlphaPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathPatternMirrorSRGBIgnoreAlphaPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathAASolidPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathAALinearPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathAARadialPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathAAPatternSRGBIgnoreAlphaPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathAAPatternClampSRGBIgnoreAlphaPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathAAPatternRepeatSRGBIgnoreAlphaPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathAAPatternMirrorUSRGBIgnoreAlphaPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathAAPatternMirrorVSRGBIgnoreAlphaPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathAAPatternMirrorSRGBIgnoreAlphaPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFSolidPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFLinearPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFRadialPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFPatternSRGBIgnoreAlphaPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFPatternClampSRGBIgnoreAlphaPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFPatternRepeatSRGBIgnoreAlphaPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFPatternMirrorUSRGBIgnoreAlphaPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFPatternMirrorVSRGBIgnoreAlphaPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFPatternMirrorSRGBIgnoreAlphaPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFLCDSolidPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFLCDLinearPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFLCDRadialPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFLCDPatternSRGBIgnoreAlphaPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFLCDPatternClampSRGBIgnoreAlphaPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFLCDPatternRepeatSRGBIgnoreAlphaPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFLCDPatternMirrorUSRGBIgnoreAlphaPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFLCDPatternMirrorVSRGBIgnoreAlphaPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFLCDPatternMirrorSRGBIgnoreAlphaPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisOpacitySolidPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisOpacityLinearPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisOpacityRadialPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisOpacityPatternSRGBIgnoreAlphaPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisOpacityPatternClampSRGBIgnoreAlphaPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisOpacityPatternRepeatSRGBIgnoreAlphaPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisOpacityPatternMirrorUSRGBIgnoreAlphaPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisOpacityPatternMirrorVSRGBIgnoreAlphaPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisOpacityPatternMirrorSRGBIgnoreAlphaPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisUpsamplePS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisDownsamplePS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisShadowPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisBlurPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderRef<FNoesisPSBase>()
-		},
-
-		// IgnoreAlpha, !GammaCorrection, LinearPattern, LinearColor
-		{
-			TShaderMapRef<FNoesisRgbaPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisMaskPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisClearPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathSolidPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathLinearPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathRadialPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathPatternIgnoreAlphaPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathPatternClampIgnoreAlphaPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathPatternRepeatIgnoreAlphaPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathPatternMirrorUIgnoreAlphaPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathPatternMirrorVIgnoreAlphaPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathPatternMirrorIgnoreAlphaPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathAASolidPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathAALinearPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathAARadialPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathAAPatternIgnoreAlphaPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathAAPatternClampIgnoreAlphaPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathAAPatternRepeatIgnoreAlphaPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathAAPatternMirrorUIgnoreAlphaPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathAAPatternMirrorVIgnoreAlphaPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathAAPatternMirrorIgnoreAlphaPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFSolidPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFLinearPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFRadialPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFPatternIgnoreAlphaPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFPatternClampIgnoreAlphaPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFPatternRepeatIgnoreAlphaPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFPatternMirrorUIgnoreAlphaPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFPatternMirrorVIgnoreAlphaPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFPatternMirrorIgnoreAlphaPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFLCDSolidPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFLCDLinearPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFLCDRadialPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFLCDPatternIgnoreAlphaPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFLCDPatternClampIgnoreAlphaPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFLCDPatternRepeatIgnoreAlphaPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFLCDPatternMirrorUIgnoreAlphaPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFLCDPatternMirrorVIgnoreAlphaPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFLCDPatternMirrorIgnoreAlphaPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisOpacitySolidPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisOpacityLinearPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisOpacityRadialPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisOpacityPatternIgnoreAlphaPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisOpacityPatternClampIgnoreAlphaPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisOpacityPatternRepeatIgnoreAlphaPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisOpacityPatternMirrorUIgnoreAlphaPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisOpacityPatternMirrorVIgnoreAlphaPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisOpacityPatternMirrorIgnoreAlphaPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisUpsamplePS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisDownsamplePS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisShadowPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisBlurPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderRef<FNoesisPSBase>()
-		},
-
-		// IgnoreAlpha, GammaCorrection, !LinearPattern, !LinearColor
-		{
-			TShaderMapRef<FNoesisRgbaPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisMaskPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisClearPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathSolidPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathLinearPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathRadialPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathPatternIgnoreAlphaGammaCorrectionPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathPatternClampIgnoreAlphaGammaCorrectionPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathPatternRepeatIgnoreAlphaGammaCorrectionPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathPatternMirrorUIgnoreAlphaGammaCorrectionPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathPatternMirrorVIgnoreAlphaGammaCorrectionPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathPatternMirrorIgnoreAlphaGammaCorrectionPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathAASolidPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathAALinearPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathAARadialPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathAAPatternIgnoreAlphaGammaCorrectionPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathAAPatternClampIgnoreAlphaGammaCorrectionPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathAAPatternRepeatIgnoreAlphaGammaCorrectionPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathAAPatternMirrorUIgnoreAlphaGammaCorrectionPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathAAPatternMirrorVIgnoreAlphaGammaCorrectionPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathAAPatternMirrorIgnoreAlphaGammaCorrectionPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFSolidPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFLinearPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFRadialPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFPatternIgnoreAlphaGammaCorrectionPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFPatternClampIgnoreAlphaGammaCorrectionPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFPatternRepeatIgnoreAlphaGammaCorrectionPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFPatternMirrorUIgnoreAlphaGammaCorrectionPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFPatternMirrorVIgnoreAlphaGammaCorrectionPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFPatternMirrorIgnoreAlphaGammaCorrectionPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFLCDSolidPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFLCDLinearPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFLCDRadialPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFLCDPatternIgnoreAlphaGammaCorrectionPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFLCDPatternClampIgnoreAlphaGammaCorrectionPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFLCDPatternRepeatIgnoreAlphaGammaCorrectionPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFLCDPatternMirrorUIgnoreAlphaGammaCorrectionPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFLCDPatternMirrorVIgnoreAlphaGammaCorrectionPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFLCDPatternMirrorIgnoreAlphaGammaCorrectionPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisOpacitySolidPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisOpacityLinearPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisOpacityRadialPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisOpacityPatternIgnoreAlphaGammaCorrectionPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisOpacityPatternClampIgnoreAlphaGammaCorrectionPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisOpacityPatternRepeatIgnoreAlphaGammaCorrectionPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisOpacityPatternMirrorUIgnoreAlphaGammaCorrectionPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisOpacityPatternMirrorVIgnoreAlphaGammaCorrectionPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisOpacityPatternMirrorIgnoreAlphaGammaCorrectionPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisUpsamplePS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisDownsamplePS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisShadowPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisBlurPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderRef<FNoesisPSBase>()
-		},
-
-		// IgnoreAlpha, GammaCorrection, !LinearPattern, LinearColor
-		{
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>()
-		},
-
-		// IgnoreAlpha, GammaCorrection, LinearPattern, !LinearColor
-		{
-			TShaderMapRef<FNoesisRgbaPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisMaskPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisClearPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathSolidPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathLinearPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathRadialPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathPatternSRGBIgnoreAlphaGammaCorrectionPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathPatternClampSRGBIgnoreAlphaGammaCorrectionPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathPatternRepeatSRGBIgnoreAlphaGammaCorrectionPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathPatternMirrorUSRGBIgnoreAlphaGammaCorrectionPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathPatternMirrorVSRGBIgnoreAlphaGammaCorrectionPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathPatternMirrorSRGBIgnoreAlphaGammaCorrectionPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathAASolidPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathAALinearPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathAARadialPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathAAPatternSRGBIgnoreAlphaGammaCorrectionPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathAAPatternClampSRGBIgnoreAlphaGammaCorrectionPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathAAPatternRepeatSRGBIgnoreAlphaGammaCorrectionPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathAAPatternMirrorUSRGBIgnoreAlphaGammaCorrectionPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathAAPatternMirrorVSRGBIgnoreAlphaGammaCorrectionPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisPathAAPatternMirrorSRGBIgnoreAlphaGammaCorrectionPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFSolidPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFLinearPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFRadialPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFPatternSRGBIgnoreAlphaGammaCorrectionPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFPatternClampSRGBIgnoreAlphaGammaCorrectionPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFPatternRepeatSRGBIgnoreAlphaGammaCorrectionPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFPatternMirrorUSRGBIgnoreAlphaGammaCorrectionPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFPatternMirrorVSRGBIgnoreAlphaGammaCorrectionPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFPatternMirrorSRGBIgnoreAlphaGammaCorrectionPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFLCDSolidPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFLCDLinearPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFLCDRadialPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFLCDPatternSRGBIgnoreAlphaGammaCorrectionPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFLCDPatternClampSRGBIgnoreAlphaGammaCorrectionPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFLCDPatternRepeatSRGBIgnoreAlphaGammaCorrectionPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFLCDPatternMirrorUSRGBIgnoreAlphaGammaCorrectionPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFLCDPatternMirrorVSRGBIgnoreAlphaGammaCorrectionPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisSDFLCDPatternMirrorSRGBIgnoreAlphaGammaCorrectionPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisOpacitySolidPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisOpacityLinearPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisOpacityRadialPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisOpacityPatternSRGBIgnoreAlphaGammaCorrectionPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisOpacityPatternClampSRGBIgnoreAlphaGammaCorrectionPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisOpacityPatternRepeatSRGBIgnoreAlphaGammaCorrectionPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisOpacityPatternMirrorUSRGBIgnoreAlphaGammaCorrectionPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisOpacityPatternMirrorVSRGBIgnoreAlphaGammaCorrectionPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisOpacityPatternMirrorSRGBIgnoreAlphaGammaCorrectionPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisUpsamplePS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisDownsamplePS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisShadowPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderMapRef<FNoesisBlurPS>(GetGlobalShaderMap(GMaxRHIFeatureLevel)),
-			TShaderRef<FNoesisPSBase>()
-		},
-
-		// IgnoreAlpha, GammaCorrection, !LinearPattern, LinearColor
-		{
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>(),
-			TShaderRef<FNoesisPSBase>()
-		}
-	};
-
-	return PixelShaders[Flags][Shader];
-}
-
-static TShaderRef<FNoesisCustomEffectPS> GetCustomEffectPixelShader(const FMaterial* Material, bool IsLinearColor, bool GammaCorrection)
-{
-	TShaderRef<FShader> FoundShader;
 
 #if UE_VERSION_OLDER_THAN(4, 27, 0)
-	const FMaterialShaderMap* MaterialShaderMap = Material->GetRenderingThreadShaderMap();
-	FoundShader = MaterialShaderMap->GetShader<FNoesisCustomEffectPS>();
+	const FMaterialShaderMap* MaterialShaderMap = Material.GetRenderingThreadShaderMap();
+	return MaterialShaderMap->GetShader<T>(Permutation);
 #else
 	FMaterialShaderTypes ShaderTypes;
-	if (!GammaCorrection)
-	{
-		ShaderTypes.AddShaderType<FNoesisCustomEffectPS>();
-	}
-	else
-	{
-		check(!IsLinearColor);
-		ShaderTypes.AddShaderType<FNoesisCustomEffectGammaCorrectionPS>();
-	}
+	ShaderTypes.AddShaderType<T>(Permutation.ToDimensionValueId());
 	FMaterialShaders Shaders;
-	Material->TryGetShaders(ShaderTypes, nullptr, Shaders);
+	Material.TryGetShaders(ShaderTypes, nullptr, Shaders);
+
+	TShaderRef<T> FoundShader;
 	Shaders.TryGetPixelShader(FoundShader);
+	return FoundShader;
 #endif
-
-	return TShaderRef<FNoesisCustomEffectPS>::Cast(FoundShader);
-}
-
-static TShaderRef<FNoesisMaterialPSBase> GetMaterialPixelShader(const FMaterial* Material, Noesis::Shader::Enum ShaderType, bool IsLinearColor, bool GammaCorrection)
-{
-	TShaderRef<FShader> FoundShader;
-
-#if UE_VERSION_OLDER_THAN(4, 27, 0)
-	const FMaterialShaderMap* MaterialShaderMap = Material->GetRenderingThreadShaderMap();
-
-	if (IsLinearColor)
-	{
-		switch (ShaderType)
-		{
-			case Noesis::Shader::Path_Pattern:
-				FoundShader = MaterialShaderMap->GetShader<FNoesisPathMaterialLinearColorPS>();
-				break;
-			case Noesis::Shader::Path_Pattern_Clamp:
-				FoundShader = MaterialShaderMap->GetShader<FNoesisPathMaterialClampLinearColorPS>();
-				break;
-			case Noesis::Shader::Path_Pattern_Repeat:
-				FoundShader = MaterialShaderMap->GetShader<FNoesisPathMaterialRepeatLinearColorPS>();
-				break;
-			case Noesis::Shader::Path_Pattern_MirrorU:
-				FoundShader = MaterialShaderMap->GetShader<FNoesisPathMaterialMirrorULinearColorPS>();
-				break;
-			case Noesis::Shader::Path_Pattern_MirrorV:
-				FoundShader = MaterialShaderMap->GetShader<FNoesisPathMaterialMirrorVLinearColorPS>();
-				break;
-			case Noesis::Shader::Path_Pattern_Mirror:
-				FoundShader = MaterialShaderMap->GetShader<FNoesisPathMaterialMirrorLinearColorPS>();
-				break;
-			case Noesis::Shader::Path_AA_Pattern:
-				FoundShader = MaterialShaderMap->GetShader<FNoesisPathAAMaterialLinearColorPS>();
-				break;
-			case Noesis::Shader::Path_AA_Pattern_Clamp:
-				FoundShader = MaterialShaderMap->GetShader<FNoesisPathAAMaterialClampLinearColorPS>();
-				break;
-			case Noesis::Shader::Path_AA_Pattern_Repeat:
-				FoundShader = MaterialShaderMap->GetShader<FNoesisPathAAMaterialRepeatLinearColorPS>();
-				break;
-			case Noesis::Shader::Path_AA_Pattern_MirrorU:
-				FoundShader = MaterialShaderMap->GetShader<FNoesisPathAAMaterialMirrorULinearColorPS>();
-				break;
-			case Noesis::Shader::Path_AA_Pattern_MirrorV:
-				FoundShader = MaterialShaderMap->GetShader<FNoesisPathAAMaterialMirrorVLinearColorPS>();
-				break;
-			case Noesis::Shader::Path_AA_Pattern_Mirror:
-				FoundShader = MaterialShaderMap->GetShader<FNoesisPathAAMaterialMirrorLinearColorPS>();
-				break;
-			case Noesis::Shader::SDF_Pattern:
-				FoundShader = MaterialShaderMap->GetShader<FNoesisSDFMaterialLinearColorPS>();
-				break;
-			case Noesis::Shader::SDF_Pattern_Clamp:
-				FoundShader = MaterialShaderMap->GetShader<FNoesisSDFMaterialClampLinearColorPS>();
-				break;
-			case Noesis::Shader::SDF_Pattern_Repeat:
-				FoundShader = MaterialShaderMap->GetShader<FNoesisSDFMaterialRepeatLinearColorPS>();
-				break;
-			case Noesis::Shader::SDF_Pattern_MirrorU:
-				FoundShader = MaterialShaderMap->GetShader<FNoesisSDFMaterialMirrorULinearColorPS>();
-				break;
-			case Noesis::Shader::SDF_Pattern_MirrorV:
-				FoundShader = MaterialShaderMap->GetShader<FNoesisSDFMaterialMirrorVLinearColorPS>();
-				break;
-			case Noesis::Shader::SDF_Pattern_Mirror:
-				FoundShader = MaterialShaderMap->GetShader<FNoesisSDFMaterialMirrorLinearColorPS>();
-				break;
-			case Noesis::Shader::SDF_LCD_Pattern:
-				FoundShader = MaterialShaderMap->GetShader<FNoesisSDFLCDMaterialLinearColorPS>();
-				break;
-			case Noesis::Shader::SDF_LCD_Pattern_Clamp:
-				FoundShader = MaterialShaderMap->GetShader<FNoesisSDFLCDMaterialClampLinearColorPS>();
-				break;
-			case Noesis::Shader::SDF_LCD_Pattern_Repeat:
-				FoundShader = MaterialShaderMap->GetShader<FNoesisSDFLCDMaterialRepeatLinearColorPS>();
-				break;
-			case Noesis::Shader::SDF_LCD_Pattern_MirrorU:
-				FoundShader = MaterialShaderMap->GetShader<FNoesisSDFLCDMaterialMirrorULinearColorPS>();
-				break;
-			case Noesis::Shader::SDF_LCD_Pattern_MirrorV:
-				FoundShader = MaterialShaderMap->GetShader<FNoesisSDFLCDMaterialMirrorVLinearColorPS>();
-				break;
-			case Noesis::Shader::SDF_LCD_Pattern_Mirror:
-				FoundShader = MaterialShaderMap->GetShader<FNoesisSDFLCDMaterialMirrorLinearColorPS>();
-				break;
-			case Noesis::Shader::Opacity_Pattern:
-				FoundShader = MaterialShaderMap->GetShader<FNoesisOpacityMaterialLinearColorPS>();
-				break;
-			case Noesis::Shader::Opacity_Pattern_Clamp:
-				FoundShader = MaterialShaderMap->GetShader<FNoesisOpacityMaterialClampLinearColorPS>();
-				break;
-			case Noesis::Shader::Opacity_Pattern_Repeat:
-				FoundShader = MaterialShaderMap->GetShader<FNoesisOpacityMaterialRepeatLinearColorPS>();
-				break;
-			case Noesis::Shader::Opacity_Pattern_MirrorU:
-				FoundShader = MaterialShaderMap->GetShader<FNoesisOpacityMaterialMirrorULinearColorPS>();
-				break;
-			case Noesis::Shader::Opacity_Pattern_MirrorV:
-				FoundShader = MaterialShaderMap->GetShader<FNoesisOpacityMaterialMirrorVLinearColorPS>();
-				break;
-			case Noesis::Shader::Opacity_Pattern_Mirror:
-				FoundShader = MaterialShaderMap->GetShader<FNoesisOpacityMaterialMirrorLinearColorPS>();
-				break;
-			default:
-				// Only pattern shaders should be requested
-				check(false);
-		}
-	}
-	else
-	{
-		switch (ShaderType)
-		{
-			case Noesis::Shader::Path_Pattern:
-				FoundShader = MaterialShaderMap->GetShader<FNoesisPathMaterialPS>();
-				break;
-			case Noesis::Shader::Path_Pattern_Clamp:
-				FoundShader = MaterialShaderMap->GetShader<FNoesisPathMaterialClampPS>();
-				break;
-			case Noesis::Shader::Path_Pattern_Repeat:
-				FoundShader = MaterialShaderMap->GetShader<FNoesisPathMaterialRepeatPS>();
-				break;
-			case Noesis::Shader::Path_Pattern_MirrorU:
-				FoundShader = MaterialShaderMap->GetShader<FNoesisPathMaterialMirrorUPS>();
-				break;
-			case Noesis::Shader::Path_Pattern_MirrorV:
-				FoundShader = MaterialShaderMap->GetShader<FNoesisPathMaterialMirrorVPS>();
-				break;
-			case Noesis::Shader::Path_Pattern_Mirror:
-				FoundShader = MaterialShaderMap->GetShader<FNoesisPathMaterialMirrorPS>();
-				break;
-			case Noesis::Shader::Path_AA_Pattern:
-				FoundShader = MaterialShaderMap->GetShader<FNoesisPathAAMaterialPS>();
-				break;
-			case Noesis::Shader::Path_AA_Pattern_Clamp:
-				FoundShader = MaterialShaderMap->GetShader<FNoesisPathAAMaterialClampPS>();
-				break;
-			case Noesis::Shader::Path_AA_Pattern_Repeat:
-				FoundShader = MaterialShaderMap->GetShader<FNoesisPathAAMaterialRepeatPS>();
-				break;
-			case Noesis::Shader::Path_AA_Pattern_MirrorU:
-				FoundShader = MaterialShaderMap->GetShader<FNoesisPathAAMaterialMirrorUPS>();
-				break;
-			case Noesis::Shader::Path_AA_Pattern_MirrorV:
-				FoundShader = MaterialShaderMap->GetShader<FNoesisPathAAMaterialMirrorVPS>();
-				break;
-			case Noesis::Shader::Path_AA_Pattern_Mirror:
-				FoundShader = MaterialShaderMap->GetShader<FNoesisPathAAMaterialMirrorPS>();
-				break;
-			case Noesis::Shader::SDF_Pattern:
-				FoundShader = MaterialShaderMap->GetShader<FNoesisSDFMaterialPS>();
-				break;
-			case Noesis::Shader::SDF_Pattern_Clamp:
-				FoundShader = MaterialShaderMap->GetShader<FNoesisSDFMaterialClampPS>();
-				break;
-			case Noesis::Shader::SDF_Pattern_Repeat:
-				FoundShader = MaterialShaderMap->GetShader<FNoesisSDFMaterialRepeatPS>();
-				break;
-			case Noesis::Shader::SDF_Pattern_MirrorU:
-				FoundShader = MaterialShaderMap->GetShader<FNoesisSDFMaterialMirrorUPS>();
-				break;
-			case Noesis::Shader::SDF_Pattern_MirrorV:
-				FoundShader = MaterialShaderMap->GetShader<FNoesisSDFMaterialMirrorVPS>();
-				break;
-			case Noesis::Shader::SDF_Pattern_Mirror:
-				FoundShader = MaterialShaderMap->GetShader<FNoesisSDFMaterialMirrorPS>();
-				break;
-			case Noesis::Shader::SDF_LCD_Pattern:
-				FoundShader = MaterialShaderMap->GetShader<FNoesisSDFLCDMaterialPS>();
-				break;
-			case Noesis::Shader::SDF_LCD_Pattern_Clamp:
-				FoundShader = MaterialShaderMap->GetShader<FNoesisSDFLCDMaterialClampPS>();
-				break;
-			case Noesis::Shader::SDF_LCD_Pattern_Repeat:
-				FoundShader = MaterialShaderMap->GetShader<FNoesisSDFLCDMaterialRepeatPS>();
-				break;
-			case Noesis::Shader::SDF_LCD_Pattern_MirrorU:
-				FoundShader = MaterialShaderMap->GetShader<FNoesisSDFLCDMaterialMirrorUPS>();
-				break;
-			case Noesis::Shader::SDF_LCD_Pattern_MirrorV:
-				FoundShader = MaterialShaderMap->GetShader<FNoesisSDFLCDMaterialMirrorVPS>();
-				break;
-			case Noesis::Shader::SDF_LCD_Pattern_Mirror:
-				FoundShader = MaterialShaderMap->GetShader<FNoesisSDFLCDMaterialMirrorPS>();
-				break;
-			case Noesis::Shader::Opacity_Pattern:
-				FoundShader = MaterialShaderMap->GetShader<FNoesisOpacityMaterialPS>();
-				break;
-			case Noesis::Shader::Opacity_Pattern_Clamp:
-				FoundShader = MaterialShaderMap->GetShader<FNoesisOpacityMaterialClampPS>();
-				break;
-			case Noesis::Shader::Opacity_Pattern_Repeat:
-				FoundShader = MaterialShaderMap->GetShader<FNoesisOpacityMaterialRepeatPS>();
-				break;
-			case Noesis::Shader::Opacity_Pattern_MirrorU:
-				FoundShader = MaterialShaderMap->GetShader<FNoesisOpacityMaterialMirrorUPS>();
-				break;
-			case Noesis::Shader::Opacity_Pattern_MirrorV:
-				FoundShader = MaterialShaderMap->GetShader<FNoesisOpacityMaterialMirrorVPS>();
-				break;
-			case Noesis::Shader::Opacity_Pattern_Mirror:
-				FoundShader = MaterialShaderMap->GetShader<FNoesisOpacityMaterialMirrorPS>();
-				break;
-			default:
-				// Only pattern shaders should be requested
-				check(false);
-		}
-	}
-#else
-	FMaterialShaderTypes ShaderTypes;
-	if (IsLinearColor)
-	{
-		check(!GammaCorrection);
-		switch (ShaderType)
-		{
-		case Noesis::Shader::Path_Pattern:
-			ShaderTypes.AddShaderType<FNoesisPathMaterialLinearColorPS>();
-			break;
-		case Noesis::Shader::Path_Pattern_Clamp:
-			ShaderTypes.AddShaderType<FNoesisPathMaterialClampLinearColorPS>();
-			break;
-		case Noesis::Shader::Path_Pattern_Repeat:
-			ShaderTypes.AddShaderType<FNoesisPathMaterialRepeatLinearColorPS>();
-			break;
-		case Noesis::Shader::Path_Pattern_MirrorU:
-			ShaderTypes.AddShaderType<FNoesisPathMaterialMirrorULinearColorPS>();
-			break;
-		case Noesis::Shader::Path_Pattern_MirrorV:
-			ShaderTypes.AddShaderType<FNoesisPathMaterialMirrorVLinearColorPS>();
-			break;
-		case Noesis::Shader::Path_Pattern_Mirror:
-			ShaderTypes.AddShaderType<FNoesisPathMaterialMirrorLinearColorPS>();
-			break;
-		case Noesis::Shader::Path_AA_Pattern:
-			ShaderTypes.AddShaderType<FNoesisPathAAMaterialLinearColorPS>();
-			break;
-		case Noesis::Shader::Path_AA_Pattern_Clamp:
-			ShaderTypes.AddShaderType<FNoesisPathAAMaterialClampLinearColorPS>();
-			break;
-		case Noesis::Shader::Path_AA_Pattern_Repeat:
-			ShaderTypes.AddShaderType<FNoesisPathAAMaterialRepeatLinearColorPS>();
-			break;
-		case Noesis::Shader::Path_AA_Pattern_MirrorU:
-			ShaderTypes.AddShaderType<FNoesisPathAAMaterialMirrorULinearColorPS>();
-			break;
-		case Noesis::Shader::Path_AA_Pattern_MirrorV:
-			ShaderTypes.AddShaderType<FNoesisPathAAMaterialMirrorVLinearColorPS>();
-			break;
-		case Noesis::Shader::Path_AA_Pattern_Mirror:
-			ShaderTypes.AddShaderType<FNoesisPathAAMaterialMirrorLinearColorPS>();
-			break;
-		case Noesis::Shader::SDF_Pattern:
-			ShaderTypes.AddShaderType<FNoesisSDFMaterialLinearColorPS>();
-			break;
-		case Noesis::Shader::SDF_Pattern_Clamp:
-			ShaderTypes.AddShaderType<FNoesisSDFMaterialClampLinearColorPS>();
-			break;
-		case Noesis::Shader::SDF_Pattern_Repeat:
-			ShaderTypes.AddShaderType<FNoesisSDFMaterialRepeatLinearColorPS>();
-			break;
-		case Noesis::Shader::SDF_Pattern_MirrorU:
-			ShaderTypes.AddShaderType<FNoesisSDFMaterialMirrorULinearColorPS>();
-			break;
-		case Noesis::Shader::SDF_Pattern_MirrorV:
-			ShaderTypes.AddShaderType<FNoesisSDFMaterialMirrorVLinearColorPS>();
-			break;
-		case Noesis::Shader::SDF_Pattern_Mirror:
-			ShaderTypes.AddShaderType<FNoesisSDFMaterialMirrorLinearColorPS>();
-			break;
-		case Noesis::Shader::SDF_LCD_Pattern:
-			ShaderTypes.AddShaderType<FNoesisSDFLCDMaterialLinearColorPS>();
-			break;
-		case Noesis::Shader::SDF_LCD_Pattern_Clamp:
-			ShaderTypes.AddShaderType<FNoesisSDFLCDMaterialClampLinearColorPS>();
-			break;
-		case Noesis::Shader::SDF_LCD_Pattern_Repeat:
-			ShaderTypes.AddShaderType<FNoesisSDFLCDMaterialRepeatLinearColorPS>();
-			break;
-		case Noesis::Shader::SDF_LCD_Pattern_MirrorU:
-			ShaderTypes.AddShaderType<FNoesisSDFLCDMaterialMirrorULinearColorPS>();
-			break;
-		case Noesis::Shader::SDF_LCD_Pattern_MirrorV:
-			ShaderTypes.AddShaderType<FNoesisSDFLCDMaterialMirrorVLinearColorPS>();
-			break;
-		case Noesis::Shader::SDF_LCD_Pattern_Mirror:
-			ShaderTypes.AddShaderType<FNoesisSDFLCDMaterialMirrorLinearColorPS>();
-			break;
-		case Noesis::Shader::Opacity_Pattern:
-			ShaderTypes.AddShaderType<FNoesisOpacityMaterialLinearColorPS>();
-			break;
-		case Noesis::Shader::Opacity_Pattern_Clamp:
-			ShaderTypes.AddShaderType<FNoesisOpacityMaterialClampLinearColorPS>();
-			break;
-		case Noesis::Shader::Opacity_Pattern_Repeat:
-			ShaderTypes.AddShaderType<FNoesisOpacityMaterialRepeatLinearColorPS>();
-			break;
-		case Noesis::Shader::Opacity_Pattern_MirrorU:
-			ShaderTypes.AddShaderType<FNoesisOpacityMaterialMirrorULinearColorPS>();
-			break;
-		case Noesis::Shader::Opacity_Pattern_MirrorV:
-			ShaderTypes.AddShaderType<FNoesisOpacityMaterialMirrorVLinearColorPS>();
-			break;
-		case Noesis::Shader::Opacity_Pattern_Mirror:
-			ShaderTypes.AddShaderType<FNoesisOpacityMaterialMirrorLinearColorPS>();
-			break;
-		default:
-			// Only pattern shaders should be requested
-			check(false);
-		}
-	}
-	else
-	{
-		if (GammaCorrection)
-		{
-			switch (ShaderType)
-			{
-			case Noesis::Shader::Path_Pattern:
-				ShaderTypes.AddShaderType<FNoesisPathMaterialGammaCorrectionPS>();
-				break;
-			case Noesis::Shader::Path_Pattern_Clamp:
-				ShaderTypes.AddShaderType<FNoesisPathMaterialClampGammaCorrectionPS>();
-				break;
-			case Noesis::Shader::Path_Pattern_Repeat:
-				ShaderTypes.AddShaderType<FNoesisPathMaterialRepeatGammaCorrectionPS>();
-				break;
-			case Noesis::Shader::Path_Pattern_MirrorU:
-				ShaderTypes.AddShaderType<FNoesisPathMaterialMirrorUGammaCorrectionPS>();
-				break;
-			case Noesis::Shader::Path_Pattern_MirrorV:
-				ShaderTypes.AddShaderType<FNoesisPathMaterialMirrorVGammaCorrectionPS>();
-				break;
-			case Noesis::Shader::Path_Pattern_Mirror:
-				ShaderTypes.AddShaderType<FNoesisPathMaterialMirrorGammaCorrectionPS>();
-				break;
-			case Noesis::Shader::Path_AA_Pattern:
-				ShaderTypes.AddShaderType<FNoesisPathAAMaterialGammaCorrectionPS>();
-				break;
-			case Noesis::Shader::Path_AA_Pattern_Clamp:
-				ShaderTypes.AddShaderType<FNoesisPathAAMaterialClampGammaCorrectionPS>();
-				break;
-			case Noesis::Shader::Path_AA_Pattern_Repeat:
-				ShaderTypes.AddShaderType<FNoesisPathAAMaterialRepeatGammaCorrectionPS>();
-				break;
-			case Noesis::Shader::Path_AA_Pattern_MirrorU:
-				ShaderTypes.AddShaderType<FNoesisPathAAMaterialMirrorUGammaCorrectionPS>();
-				break;
-			case Noesis::Shader::Path_AA_Pattern_MirrorV:
-				ShaderTypes.AddShaderType<FNoesisPathAAMaterialMirrorVGammaCorrectionPS>();
-				break;
-			case Noesis::Shader::Path_AA_Pattern_Mirror:
-				ShaderTypes.AddShaderType<FNoesisPathAAMaterialMirrorGammaCorrectionPS>();
-				break;
-			case Noesis::Shader::SDF_Pattern:
-				ShaderTypes.AddShaderType<FNoesisSDFMaterialGammaCorrectionPS>();
-				break;
-			case Noesis::Shader::SDF_Pattern_Clamp:
-				ShaderTypes.AddShaderType<FNoesisSDFMaterialClampGammaCorrectionPS>();
-				break;
-			case Noesis::Shader::SDF_Pattern_Repeat:
-				ShaderTypes.AddShaderType<FNoesisSDFMaterialRepeatGammaCorrectionPS>();
-				break;
-			case Noesis::Shader::SDF_Pattern_MirrorU:
-				ShaderTypes.AddShaderType<FNoesisSDFMaterialMirrorUGammaCorrectionPS>();
-				break;
-			case Noesis::Shader::SDF_Pattern_MirrorV:
-				ShaderTypes.AddShaderType<FNoesisSDFMaterialMirrorVGammaCorrectionPS>();
-				break;
-			case Noesis::Shader::SDF_Pattern_Mirror:
-				ShaderTypes.AddShaderType<FNoesisSDFMaterialMirrorGammaCorrectionPS>();
-				break;
-			case Noesis::Shader::SDF_LCD_Pattern:
-				ShaderTypes.AddShaderType<FNoesisSDFLCDMaterialGammaCorrectionPS>();
-				break;
-			case Noesis::Shader::SDF_LCD_Pattern_Clamp:
-				ShaderTypes.AddShaderType<FNoesisSDFLCDMaterialClampGammaCorrectionPS>();
-				break;
-			case Noesis::Shader::SDF_LCD_Pattern_Repeat:
-				ShaderTypes.AddShaderType<FNoesisSDFLCDMaterialRepeatGammaCorrectionPS>();
-				break;
-			case Noesis::Shader::SDF_LCD_Pattern_MirrorU:
-				ShaderTypes.AddShaderType<FNoesisSDFLCDMaterialMirrorUGammaCorrectionPS>();
-				break;
-			case Noesis::Shader::SDF_LCD_Pattern_MirrorV:
-				ShaderTypes.AddShaderType<FNoesisSDFLCDMaterialMirrorVGammaCorrectionPS>();
-				break;
-			case Noesis::Shader::SDF_LCD_Pattern_Mirror:
-				ShaderTypes.AddShaderType<FNoesisSDFLCDMaterialMirrorGammaCorrectionPS>();
-				break;
-			case Noesis::Shader::Opacity_Pattern:
-				ShaderTypes.AddShaderType<FNoesisOpacityMaterialGammaCorrectionPS>();
-				break;
-			case Noesis::Shader::Opacity_Pattern_Clamp:
-				ShaderTypes.AddShaderType<FNoesisOpacityMaterialClampGammaCorrectionPS>();
-				break;
-			case Noesis::Shader::Opacity_Pattern_Repeat:
-				ShaderTypes.AddShaderType<FNoesisOpacityMaterialRepeatGammaCorrectionPS>();
-				break;
-			case Noesis::Shader::Opacity_Pattern_MirrorU:
-				ShaderTypes.AddShaderType<FNoesisOpacityMaterialMirrorUGammaCorrectionPS>();
-				break;
-			case Noesis::Shader::Opacity_Pattern_MirrorV:
-				ShaderTypes.AddShaderType<FNoesisOpacityMaterialMirrorVGammaCorrectionPS>();
-				break;
-			case Noesis::Shader::Opacity_Pattern_Mirror:
-				ShaderTypes.AddShaderType<FNoesisOpacityMaterialMirrorGammaCorrectionPS>();
-				break;
-			default:
-				// Only pattern shaders should be requested
-				check(false);
-			}
-		}
-		else
-		{
-			switch (ShaderType)
-			{
-			case Noesis::Shader::Path_Pattern:
-				ShaderTypes.AddShaderType<FNoesisPathMaterialPS>();
-				break;
-			case Noesis::Shader::Path_Pattern_Clamp:
-				ShaderTypes.AddShaderType<FNoesisPathMaterialClampPS>();
-				break;
-			case Noesis::Shader::Path_Pattern_Repeat:
-				ShaderTypes.AddShaderType<FNoesisPathMaterialRepeatPS>();
-				break;
-			case Noesis::Shader::Path_Pattern_MirrorU:
-				ShaderTypes.AddShaderType<FNoesisPathMaterialMirrorUPS>();
-				break;
-			case Noesis::Shader::Path_Pattern_MirrorV:
-				ShaderTypes.AddShaderType<FNoesisPathMaterialMirrorVPS>();
-				break;
-			case Noesis::Shader::Path_Pattern_Mirror:
-				ShaderTypes.AddShaderType<FNoesisPathMaterialMirrorPS>();
-				break;
-			case Noesis::Shader::Path_AA_Pattern:
-				ShaderTypes.AddShaderType<FNoesisPathAAMaterialPS>();
-				break;
-			case Noesis::Shader::Path_AA_Pattern_Clamp:
-				ShaderTypes.AddShaderType<FNoesisPathAAMaterialClampPS>();
-				break;
-			case Noesis::Shader::Path_AA_Pattern_Repeat:
-				ShaderTypes.AddShaderType<FNoesisPathAAMaterialRepeatPS>();
-				break;
-			case Noesis::Shader::Path_AA_Pattern_MirrorU:
-				ShaderTypes.AddShaderType<FNoesisPathAAMaterialMirrorUPS>();
-				break;
-			case Noesis::Shader::Path_AA_Pattern_MirrorV:
-				ShaderTypes.AddShaderType<FNoesisPathAAMaterialMirrorVPS>();
-				break;
-			case Noesis::Shader::Path_AA_Pattern_Mirror:
-				ShaderTypes.AddShaderType<FNoesisPathAAMaterialMirrorPS>();
-				break;
-			case Noesis::Shader::SDF_Pattern:
-				ShaderTypes.AddShaderType<FNoesisSDFMaterialPS>();
-				break;
-			case Noesis::Shader::SDF_Pattern_Clamp:
-				ShaderTypes.AddShaderType<FNoesisSDFMaterialClampPS>();
-				break;
-			case Noesis::Shader::SDF_Pattern_Repeat:
-				ShaderTypes.AddShaderType<FNoesisSDFMaterialRepeatPS>();
-				break;
-			case Noesis::Shader::SDF_Pattern_MirrorU:
-				ShaderTypes.AddShaderType<FNoesisSDFMaterialMirrorUPS>();
-				break;
-			case Noesis::Shader::SDF_Pattern_MirrorV:
-				ShaderTypes.AddShaderType<FNoesisSDFMaterialMirrorVPS>();
-				break;
-			case Noesis::Shader::SDF_Pattern_Mirror:
-				ShaderTypes.AddShaderType<FNoesisSDFMaterialMirrorPS>();
-				break;
-			case Noesis::Shader::SDF_LCD_Pattern:
-				ShaderTypes.AddShaderType<FNoesisSDFLCDMaterialPS>();
-				break;
-			case Noesis::Shader::SDF_LCD_Pattern_Clamp:
-				ShaderTypes.AddShaderType<FNoesisSDFLCDMaterialClampPS>();
-				break;
-			case Noesis::Shader::SDF_LCD_Pattern_Repeat:
-				ShaderTypes.AddShaderType<FNoesisSDFLCDMaterialRepeatPS>();
-				break;
-			case Noesis::Shader::SDF_LCD_Pattern_MirrorU:
-				ShaderTypes.AddShaderType<FNoesisSDFLCDMaterialMirrorUPS>();
-				break;
-			case Noesis::Shader::SDF_LCD_Pattern_MirrorV:
-				ShaderTypes.AddShaderType<FNoesisSDFLCDMaterialMirrorVPS>();
-				break;
-			case Noesis::Shader::SDF_LCD_Pattern_Mirror:
-				ShaderTypes.AddShaderType<FNoesisSDFLCDMaterialMirrorPS>();
-				break;
-			case Noesis::Shader::Opacity_Pattern:
-				ShaderTypes.AddShaderType<FNoesisOpacityMaterialPS>();
-				break;
-			case Noesis::Shader::Opacity_Pattern_Clamp:
-				ShaderTypes.AddShaderType<FNoesisOpacityMaterialClampPS>();
-				break;
-			case Noesis::Shader::Opacity_Pattern_Repeat:
-				ShaderTypes.AddShaderType<FNoesisOpacityMaterialRepeatPS>();
-				break;
-			case Noesis::Shader::Opacity_Pattern_MirrorU:
-				ShaderTypes.AddShaderType<FNoesisOpacityMaterialMirrorUPS>();
-				break;
-			case Noesis::Shader::Opacity_Pattern_MirrorV:
-				ShaderTypes.AddShaderType<FNoesisOpacityMaterialMirrorVPS>();
-				break;
-			case Noesis::Shader::Opacity_Pattern_Mirror:
-				ShaderTypes.AddShaderType<FNoesisOpacityMaterialMirrorPS>();
-				break;
-			default:
-				// Only pattern shaders should be requested
-				check(false);
-			}
-		}
-	}
-	FMaterialShaders Shaders;
-	Material->TryGetShaders(ShaderTypes, nullptr, Shaders);
-	Shaders.TryGetPixelShader(FoundShader);
-
-#endif
-
-	return TShaderRef<FNoesisMaterialPSBase>::Cast(FoundShader);
 }
 
 template<ESamplerFilter Filter = SF_Point,
@@ -1982,7 +453,7 @@ public:
 	}
 };
 
-static FRHIDepthStencilState* GetDepthStencilState(uint8 State)
+static FRHIDepthStencilState* GetDepthStencilState(uint8 State, bool AlphaMask)
 {
 	static FRHIDepthStencilState* DepthStencilStates[Noesis::StencilMode::Count] =
 	{
@@ -1995,7 +466,18 @@ static FRHIDepthStencilState* GetDepthStencilState(uint8 State)
 		TStaticDepthStencilState<false, CF_DepthNearOrEqual, true, CF_Equal,  SO_Keep, SO_Keep, SO_Keep,      true, CF_Equal,  SO_Keep, SO_Keep, SO_Keep>::GetRHI()
 	};
 
-	return DepthStencilStates[State];
+	static FRHIDepthStencilState* DepthStencilStatesAlphaMask[Noesis::StencilMode::Count] =
+	{
+		TStaticDepthStencilState<false, CF_Always>::GetRHI(),
+		TStaticDepthStencilState<false, CF_Always,           true, CF_Equal,  SO_Keep, SO_Keep, SO_Keep,      true, CF_Equal,  SO_Keep, SO_Keep, SO_Keep>::GetRHI(),
+		TStaticDepthStencilState<false, CF_Always,           true, CF_Equal,  SO_Keep, SO_Keep, SO_Increment, true, CF_Equal,  SO_Keep, SO_Keep, SO_Increment>::GetRHI(),
+		TStaticDepthStencilState<false, CF_Always,           true, CF_Equal,  SO_Keep, SO_Keep, SO_Decrement, true, CF_Equal,  SO_Keep, SO_Keep, SO_Decrement>::GetRHI(),
+		TStaticDepthStencilState<false, CF_Always,           true, CF_Always, SO_Keep, SO_Keep, SO_Zero,      true, CF_Always, SO_Keep, SO_Keep, SO_Zero>::GetRHI(),
+		TStaticDepthStencilState<true>::GetRHI(),
+		TStaticDepthStencilState<true,  CF_DepthNearOrEqual, true, CF_Equal,  SO_Keep, SO_Keep, SO_Keep,      true, CF_Equal,  SO_Keep, SO_Keep, SO_Keep>::GetRHI()
+	};
+
+	return AlphaMask ? DepthStencilStatesAlphaMask[State] : DepthStencilStates[State];
 }
 
 static FRHIBlendState* GetBlendState(uint8 State)
@@ -2115,8 +597,8 @@ FNoesisRenderDevice::FNoesisRenderDevice(bool LinearColor)
 	FRHIBufferCreateDesc IBDesc = FRHIBufferCreateDesc::Create(IBName, DYNAMIC_IB_SIZE, sizeof(int16), IBUsage).SetInitialState(IBState);
 	DynamicIndexBuffer = FRHICommandListExecutor::GetImmediateCommandList().CreateBuffer(IBDesc);
 #endif
-	NOESIS_BIND_DEBUG_BUFFER_LABEL(DynamicVertexBuffer, VBName);
-	NOESIS_BIND_DEBUG_BUFFER_LABEL(DynamicIndexBuffer, IBName);
+	NOESIS_BIND_DEBUG_BUFFER_LABEL(FRHICommandListExecutor::GetImmediateCommandList(), DynamicVertexBuffer, VBName);
+	NOESIS_BIND_DEBUG_BUFFER_LABEL(FRHICommandListExecutor::GetImmediateCommandList(), DynamicIndexBuffer, IBName);
 
 	VSConstantBuffer = TUniformBufferRef<FNoesisVSConstants>::CreateUniformBufferImmediate(FNoesisVSConstants(), UniformBuffer_MultiFrame);
 	VSConstantBufferStereo = TUniformBufferRef<FNoesisVSConstantsStereo>::CreateUniformBufferImmediate(FNoesisVSConstantsStereo(), UniformBuffer_MultiFrame);
@@ -2545,7 +1027,8 @@ void FNoesisRenderDevice::DestroyMaterial(void* InMaterial)
 
 const Noesis::DeviceCaps& FNoesisRenderDevice::GetCaps() const
 {
-	static Noesis::DeviceCaps Caps = { 0.f, IsLinearColor, false };
+	static Noesis::DeviceCaps Caps;
+	Caps.linearRendering = IsLinearColor;
 	return Caps;
 }
 
@@ -2601,7 +1084,7 @@ static void NoesisCreateTargetableShaderResource2D(
 			.SetClearValue(ClearValue);
 		OutTargetableTexture = OutShaderResourceTexture = RHICreateTexture(TextureDesc);
 #endif
-		NOESIS_BIND_DEBUG_TEXTURE_LABEL(OutTargetableTexture, Name);
+		NOESIS_BIND_DEBUG_TEXTURE_LABEL(FRHICommandListExecutor::GetImmediateCommandList(), OutTargetableTexture, Name);
 	}
 	else
 	{
@@ -2641,8 +1124,8 @@ static void NoesisCreateTargetableShaderResource2D(
 			.SetClearValue(ClearValue);
 		OutShaderResourceTexture = RHICreateTexture(ShaderResourceTextureDesc);
 #endif
-		NOESIS_BIND_DEBUG_TEXTURE_LABEL(OutTargetableTexture, *RTName);
-		NOESIS_BIND_DEBUG_TEXTURE_LABEL(OutShaderResourceTexture, *SRName);
+		NOESIS_BIND_DEBUG_TEXTURE_LABEL(FRHICommandListExecutor::GetImmediateCommandList(), OutTargetableTexture, *RTName);
+		NOESIS_BIND_DEBUG_TEXTURE_LABEL(FRHICommandListExecutor::GetImmediateCommandList(), OutShaderResourceTexture, *SRName);
 	}
 }
 
@@ -2666,7 +1149,7 @@ static Noesis::Ptr<Noesis::RenderTarget> CreateRenderTarget(const TCHAR* Name, u
 Noesis::Ptr<Noesis::RenderTarget> FNoesisRenderDevice::CreateRenderTarget(const char* Label, uint32 Width, uint32 Height, uint32 SampleCount, bool NeedsStencil)
 {
 	TStringBuilder<64> Name;
-	Name.Append(TEXT("Noesis.RenderTarget.")).Append(UTF8_TO_TCHAR(Label));
+	Name.Append(TEXT("Noesis.RenderTarget.")).Append(StringCast<TCHAR>((UTF8CHAR*)Label).Get());
 	FTextureRHIRef DepthStencilTarget;
 
 	if (NeedsStencil)
@@ -2693,7 +1176,7 @@ Noesis::Ptr<Noesis::RenderTarget> FNoesisRenderDevice::CreateRenderTarget(const 
 			.SetClearValue(ClearValue);
 		DepthStencilTarget = RHICreateTexture(DepthStencilTargetDesc);
 #endif
-		NOESIS_BIND_DEBUG_TEXTURE_LABEL(DepthStencilTarget, *DSName);
+		NOESIS_BIND_DEBUG_TEXTURE_LABEL(FRHICommandListExecutor::GetImmediateCommandList(), DepthStencilTarget, *DSName);
 	}
 
 	return ::CreateRenderTarget(*Name, Width, Height, SampleCount, DepthStencilTarget, IsLinearColor);
@@ -2702,7 +1185,7 @@ Noesis::Ptr<Noesis::RenderTarget> FNoesisRenderDevice::CreateRenderTarget(const 
 Noesis::Ptr<Noesis::RenderTarget> FNoesisRenderDevice::CloneRenderTarget(const char* Label, Noesis::RenderTarget* InSharedRenderTarget)
 {
 	TStringBuilder<64> Name;
-	Name.Append(TEXT("Noesis.RenderTarget.")).Append(UTF8_TO_TCHAR(Label));
+	Name.Append(TEXT("Noesis.RenderTarget.")).Append(StringCast<TCHAR>((UTF8CHAR*)Label).Get());
 	FNoesisRenderTarget* SharedRenderTarget = (FNoesisRenderTarget*)InSharedRenderTarget;
 
 	FRHITexture* ColorTarget = SharedRenderTarget->GetColorTarget();
@@ -2717,7 +1200,7 @@ Noesis::Ptr<Noesis::RenderTarget> FNoesisRenderDevice::CloneRenderTarget(const c
 Noesis::Ptr<Noesis::Texture> FNoesisRenderDevice::CreateTexture(const char* Label, uint32 Width, uint32 Height, uint32 NumLevels, Noesis::TextureFormat::Enum TextureFormat, const void** Data)
 {
 	TStringBuilder<64> Name;
-	Name.Append(TEXT("Noesis.Texture.")).Append(UTF8_TO_TCHAR(Label));
+	Name.Append(TEXT("Noesis.Texture.")).Append(StringCast<TCHAR>((UTF8CHAR*)Label).Get());
 	uint32 SizeX = (uint32)Width;
 	uint32 SizeY = (uint32)Height;
 	EPixelFormat Formats[Noesis::TextureFormat::Count] = { PF_R8G8B8A8, PF_R8G8B8A8, PF_G8 };
@@ -2739,7 +1222,7 @@ Noesis::Ptr<Noesis::Texture> FNoesisRenderDevice::CreateTexture(const char* Labe
 		.SetInitialState(Access);
 	FTextureRHIRef ShaderResourceTexture = RHICreateTexture(ShaderResourceTextureDesc);
 #endif
-	NOESIS_BIND_DEBUG_TEXTURE_LABEL(ShaderResourceTexture, *Name);
+	NOESIS_BIND_DEBUG_TEXTURE_LABEL(FRHICommandListExecutor::GetImmediateCommandList(), ShaderResourceTexture, *Name);
 
 	Noesis::Ptr<FNoesisTexture> Texture = Noesis::MakePtr<FNoesisTexture>(ShaderResourceTexture);
 
@@ -2921,7 +1404,7 @@ void FNoesisRenderDevice::UnmapIndices()
 }
 
 template<>
-bool FNoesisRenderDevice::SetPatternMaterialParameters<FNoesisPSBase>(const Noesis::Batch& Batch, TShaderRef<FNoesisPSBase>& PixelShader)
+bool FNoesisRenderDevice::SetPatternMaterialParameters<FNoesisPS>(const Noesis::Batch& Batch, const FMaterialRenderProxy* MaterialProxy, const FMaterial* Material, const TShaderRef<FNoesisPS>& PixelShader)
 {
 	if (Batch.pattern != nullptr)
 	{
@@ -2939,17 +1422,9 @@ bool FNoesisRenderDevice::SetPatternMaterialParameters<FNoesisPSBase>(const Noes
 }
 
 template<>
-bool FNoesisRenderDevice::SetPatternMaterialParameters<FNoesisMaterialPSBase>(const Noesis::Batch& Batch, TShaderRef<FNoesisMaterialPSBase>& PixelShader)
+bool FNoesisRenderDevice::SetPatternMaterialParameters<FNoesisMaterialPS>(const Noesis::Batch& Batch, const FMaterialRenderProxy* MaterialProxy, const FMaterial* Material, const TShaderRef<FNoesisMaterialPS>& PixelShader)
 {
-	FMaterialRenderProxy* MaterialProxy = ((FNoesisMaterial*)Batch.pixelShader)->GetRenderProxy();
-	if (MaterialProxy == nullptr)
-		return false;
-#if UE_VERSION_OLDER_THAN(4, 27, 0)
-	const FMaterial* Material = MaterialProxy->GetMaterial(GMaxRHIFeatureLevel);
-#else
-	const FMaterial* Material = &MaterialProxy->GetIncompleteMaterialWithFallback(GMaxRHIFeatureLevel);
-#endif
-	FRHIPixelShader* ShaderRHI = RHICmdList->GetBoundPixelShader();
+	FRHIPixelShader* ShaderRHI = PixelShader.GetPixelShader();
 	PixelShader->SetViewParameters(*RHICmdList, ShaderRHI, *View, ViewUniformBuffer);
 #if UE_VERSION_OLDER_THAN(5, 1, 0)
 	PixelShader->SetParameters<FRHIPixelShader>(*RHICmdList, ShaderRHI, MaterialProxy, *Material, *View);
@@ -2961,9 +1436,8 @@ bool FNoesisRenderDevice::SetPatternMaterialParameters<FNoesisMaterialPSBase>(co
 }
 
 template<class PixelShaderClass>
-bool FNoesisRenderDevice::SetPixelShaderParameters(const Noesis::Batch& Batch, TShaderRef<PixelShaderClass>& BasePixelShader, FUniformBufferRHIRef& PSUniformBuffer0, FUniformBufferRHIRef& PSUniformBuffer1)
+bool FNoesisRenderDevice::SetPixelShaderParameters(const Noesis::Batch& Batch, const FMaterialRenderProxy* MaterialProxy, const FMaterial* Material, const TShaderRef<PixelShaderClass>& PixelShader, const FUniformBufferRHIRef& PSUniformBuffer0, const FUniformBufferRHIRef& PSUniformBuffer1)
 {
-	TShaderRef<PixelShaderClass> PixelShader = TShaderRef<PixelShaderClass>::Cast(BasePixelShader);
 	if (Batch.pixelUniforms[0].values != nullptr)
 	{
 		PixelShader->SetPSConstants(*RHICmdList, PSUniformBuffer0);
@@ -2974,7 +1448,7 @@ bool FNoesisRenderDevice::SetPixelShaderParameters(const Noesis::Batch& Batch, T
 		PixelShader->SetEffects(*RHICmdList, PSUniformBuffer1);
 	}
 
-	if (!SetPatternMaterialParameters(Batch, PixelShader))
+	if (!SetPatternMaterialParameters(Batch, MaterialProxy, Material, PixelShader))
 		return false;
 
 	if (Batch.ramps != nullptr)
@@ -3013,17 +1487,9 @@ bool FNoesisRenderDevice::SetPixelShaderParameters(const Noesis::Batch& Batch, T
 }
 
 template<>
-bool FNoesisRenderDevice::SetPixelShaderParameters<FNoesisCustomEffectPS>(const Noesis::Batch& Batch, TShaderRef<FNoesisCustomEffectPS>& PixelShader, FUniformBufferRHIRef& PSUniformBuffer0, FUniformBufferRHIRef& PSUniformBuffer1)
+bool FNoesisRenderDevice::SetPixelShaderParameters<FNoesisCustomEffectPS>(const Noesis::Batch& Batch, const FMaterialRenderProxy* MaterialProxy, const FMaterial* Material, const TShaderRef<FNoesisCustomEffectPS>& PixelShader, const FUniformBufferRHIRef& PSUniformBuffer0, const FUniformBufferRHIRef& PSUniformBuffer1)
 {
-	FMaterialRenderProxy* MaterialProxy = ((FNoesisMaterial*)Batch.pixelShader)->GetRenderProxy();
-	if (MaterialProxy == nullptr)
-		return false;
-#if UE_VERSION_OLDER_THAN(4, 27, 0)
-	const FMaterial* Material = MaterialProxy->GetMaterial(GMaxRHIFeatureLevel);
-#else
-	const FMaterial* Material = &MaterialProxy->GetIncompleteMaterialWithFallback(GMaxRHIFeatureLevel);
-#endif
-	FRHIPixelShader* ShaderRHI = RHICmdList->GetBoundPixelShader();
+	FRHIPixelShader* ShaderRHI = PixelShader.GetPixelShader();
 	PixelShader->SetViewParameters(*RHICmdList, ShaderRHI, *View, ViewUniformBuffer);
 
 	FNoesisTexture* Texture = (FNoesisTexture*)(Batch.pattern);
@@ -3098,7 +1564,7 @@ bool FNoesisRenderDevice::SetPixelShaderParameters<FNoesisCustomEffectPS>(const 
 		Viewport.UVViewportBilinearMax = Viewport.UVViewportMax - 0.5f * Viewport.ExtentInverse;
 	}
 
-	PixelShader->SetParameters(*RHICmdList, PixelShader, *View, MaterialProxy, Params);
+	FNoesisCustomEffectPS::SetParameters(*RHICmdList, PixelShader, *View, MaterialProxy, *Material, Params);
 
 	return true;
 }
@@ -3166,39 +1632,72 @@ void FNoesisRenderDevice::DrawBatch(const Noesis::Batch& Batch)
 	FGraphicsPipelineStateInitializer GraphicsPSOInit;
 	RHICmdList->ApplyCachedRenderTargets(GraphicsPSOInit);
 
-	GraphicsPSOInit.DepthStencilState = GetDepthStencilState(Batch.renderState.f.stencilMode);
+	GraphicsPSOInit.DepthStencilState = GetDepthStencilState(Batch.renderState.f.stencilMode, AlphaMask);
 
-	GraphicsPSOInit.BlendState = Batch.renderState.f.colorEnable ? (IsWorldUI ? GetBlendStateWorldUI(Batch.renderState.f.blendMode) : GetBlendState(Batch.renderState.f.blendMode)) : TStaticBlendState<CW_NONE>::GetRHI();
+	GraphicsPSOInit.BlendState = AlphaMask ? TStaticBlendState<CW_RGBA>::GetRHI() : (Batch.renderState.f.colorEnable ? (IsWorldUI ? GetBlendStateWorldUI(Batch.renderState.f.blendMode) : GetBlendState(Batch.renderState.f.blendMode)) : TStaticBlendState<CW_NONE>::GetRHI());
 
 	GraphicsPSOInit.RasterizerState = Batch.renderState.f.wireframe ? TStaticRasterizerState<FM_Wireframe, CM_None>::GetRHI() : TStaticRasterizerState<FM_Solid, CM_None>::GetRHI();
+
+	const ERHIFeatureLevel::Type FeatureLevel = Scene ? Scene->GetFeatureLevel() : GMaxRHIFeatureLevel;
+	FGlobalShaderMap* GlobalShaderMap = GetGlobalShaderMap(FeatureLevel);
 
 	Noesis::Shader::Enum ShaderCode = (Noesis::Shader::Enum)Batch.shader.v;
 
 	bool GammaCorrection = !FMath::IsNearlyEqual(Gamma, 2.2f) || !FMath::IsNearlyEqual(Contrast, 1.0f);
 	bool UsingMaterialShader = Batch.pixelShader != nullptr;
 	bool UsingCustomEffect = ShaderCode == Noesis::Shader::Custom_Effect;
-	TShaderRef<FNoesisMaterialPSBase> MaterialPixelShader;
+	TShaderRef<FNoesisMaterialPS> MaterialPixelShader;
 	TShaderRef<FNoesisCustomEffectPS> CustomEffectPixelShader;
+	const FMaterialRenderProxy* MaterialProxy = nullptr;
+	const FMaterial* Material = nullptr;
 	if (UsingMaterialShader)
 	{
-		FMaterialRenderProxy* MaterialProxy = ((FNoesisMaterial*)Batch.pixelShader)->GetRenderProxy();
+		FNoesisMaterial* NoesisMaterial = (FNoesisMaterial*)Batch.pixelShader;
+		MaterialProxy = NoesisMaterial->GetRenderProxy();
 		if (MaterialProxy == nullptr)
 			return;
 
+#if !UE_VERSION_OLDER_THAN(5, 6, 0) && UE_WITH_PSO_PRECACHING
+		if (GetPSOPrecacheProxyCreationStrategy() == EPSOPrecacheProxyCreationStrategy::DelayUntilPSOPrecached && NoesisMaterial->IsPrecachePendingAndBoost())
+		{
+			if (UE_LOG_ACTIVE(LogNoesis, Display))
+			{
+				//Only output this once a frame since it can be spammy
+				static uint64 FrameCountPrev = 0;
+				if (GFrameCounterRenderThread != FrameCountPrev)
+				{
+					UE_LOG(LogNoesis, Display, TEXT("Skipping some Noesis draws due to incomplete material PSOs: %s"), *MaterialProxy->GetMaterialName());
+					FrameCountPrev = GFrameCounterRenderThread;
+				}
+			}
+			return;
+		}
+#endif
+
 #if UE_VERSION_OLDER_THAN(4, 27, 0)
-		const FMaterial* Material = MaterialProxy->GetMaterial(GMaxRHIFeatureLevel);
+		Material = MaterialProxy->GetMaterial(FeatureLevel);
 #else
-		const FMaterial* Material = &MaterialProxy->GetIncompleteMaterialWithFallback(GMaxRHIFeatureLevel);
+		Material = &MaterialProxy->GetIncompleteMaterialWithFallback(FeatureLevel);
 #endif
 		if (UsingCustomEffect)
 		{
 			UsingMaterialShader = false;
 
-			CustomEffectPixelShader = GetCustomEffectPixelShader(Material, IsLinearColor, GammaCorrection);
+			FNoesisCustomEffectPS::FPermutationDomain Permutation;
+			Permutation.Set<FNoesisCustomEffectPS::FGammaCorrection>(GammaCorrection);
+			Permutation.Set<FNoesisCustomEffectPS::FAlphaMask>(AlphaMask);
+
+			CustomEffectPixelShader = GetMaterialPixelShader<FNoesisCustomEffectPS>(*Material, Permutation);
 		}
 		else
 		{
-			MaterialPixelShader = GetMaterialPixelShader(Material, ShaderCode, IsLinearColor, GammaCorrection);
+			FNoesisMaterialPS::FPermutationDomain Permutation;
+			Permutation.Set<FNoesisMaterialPS::FEffect>(ShaderCode);
+			Permutation.Set<FNoesisMaterialPS::FLinearColor>(IsLinearColor);
+			Permutation.Set<FNoesisMaterialPS::FGammaCorrection>(GammaCorrection);
+			Permutation.Set<FNoesisMaterialPS::FAlphaMask>(AlphaMask);
+
+			MaterialPixelShader = GetMaterialPixelShader<FNoesisMaterialPS>(*Material, Permutation);
 		}
 	}
 
@@ -3210,24 +1709,46 @@ void FNoesisRenderDevice::DrawBatch(const Noesis::Batch& Batch)
 		FRHITexture* PatternTexture = Texture->GetTexture2D();
 		if (PatternTexture != nullptr)
 		{
-			// Read the comment next to PATTERN_SRGB and PATTERN_LINEAR in FNoesisPS::ModifyCompilationEnvironment
 			PatternLinear = EnumHasAnyFlags(PatternTexture->GetFlags(), TexCreate_SRGB);
 		}
 
 		PatternIgnoreAlpha = Texture->MustIgnoreAlpha();
 	}
 
-	uint32 VertexShaderCode = Noesis::VertexForShader[ShaderCode];
-	uint8 VertexShaderFlags = (IsLinearColor ? VSFlags::LinearColor : VSFlags::None) | (Batch.singlePassStereo ? VSFlags::Stereo : VSFlags::None);
-	TShaderRef<FNoesisVSBase> VertexShader = GetVertexShader((Noesis::Shader::Vertex::Enum)VertexShaderCode, VertexShaderFlags);
+	const uint8_t VertexShaderCode = Noesis::VertexForShader[ShaderCode];
 
-	uint32 VertexFormatCode = Noesis::FormatForVertex[VertexShaderCode];
-	FVertexDeclarationRHIRef VertexDeclaration = GetVertexDelcaration((Noesis::Shader::Vertex::Format::Enum)VertexFormatCode);
+	FNoesisVS::FPermutationDomain VSPermutation;
+	VSPermutation.Set<FNoesisVS::FVertexShader>(VertexShaderCode);
+	VSPermutation.Set<FNoesisVS::FStereo>(Batch.singlePassStereo);
+	VSPermutation.Set<FNoesisVS::FLinearColor>(IsLinearColor);
 
-	uint8 PixelShaderFlags = (IsLinearColor ? PSFlags::LinearColor : PSFlags::None) | (PatternLinear ? PSFlags::LinearPattern : PSFlags::None)
-		| (GammaCorrection ? PSFlags::GammaCorrection : PSFlags::None) | (PatternIgnoreAlpha ? PSFlags::IgnoreAlpha : PSFlags::None);
+	TShaderRef<FNoesisVS> VertexShader = GlobalShaderMap->GetShader<FNoesisVS>(VSPermutation);
 
-	TShaderRef<FNoesisPSBase> PixelShader = GetGlobalPixelShader((Noesis::Shader::Enum)ShaderCode, PixelShaderFlags);
+	FVertexDeclarationRHIRef VertexDeclaration = GetVertexDelcaration((Noesis::Shader::Vertex::Format::Enum)Noesis::FormatForVertex[VertexShaderCode]);
+
+	TShaderRef<FNoesisPS> PixelShader;
+	if (!UsingCustomEffect && !UsingMaterialShader)
+	{
+		FNoesisPS::FPermutationDomain Permutation;
+		Permutation.Set<FNoesisPS::FEffect>(ShaderCode);
+		if (AlphaMask)
+		{
+			Permutation.Set<FNoesisPS::FLinearColor>(IsLinearColor);
+			Permutation.Set<FNoesisPS::FAlphaMask>(AlphaMask);
+		}
+		else
+		{
+			Permutation.Set<FNoesisPS::FGammaCorrection>(GammaCorrection);
+			if (NoesisShaderHasPattern[ShaderCode])
+			{
+				Permutation.Set<FNoesisPS::FPatternIgnoreAlpha>(PatternIgnoreAlpha);
+				// The combinations where IsLinearColor == PatternLinear are the same. We only build the (false, false) shader permutation.
+				Permutation.Set<FNoesisPS::FPatternLinear>(!IsLinearColor && PatternLinear);
+				Permutation.Set<FNoesisPS::FLinearColor>(IsLinearColor && !PatternLinear);
+			}
+		}
+		PixelShader = GlobalShaderMap->GetShader<FNoesisPS>(Permutation);
+	}
 
 	FUniformBufferRHIRef& PSUniformBuffer0 = *PixelShaderConstantBuffer0[ShaderCode];
 	FUniformBufferRHIRef& PSUniformBuffer1 = *PixelShaderConstantBuffer1[ShaderCode];
@@ -3249,8 +1770,7 @@ void FNoesisRenderDevice::DrawBatch(const Noesis::Batch& Batch)
 #if PSO_PRECACHING_VALIDATE
 		if (PSOCollectorStats::IsFullPrecachingValidationEnabled())
 		{
-			static const int32 MaterialPSOCollectorIndex = FPSOCollectorCreateManager::GetIndex(GetFeatureLevelShadingPath(GMaxRHIFeatureLevel), NoesisMaterialPSOCollectorName);
-			FMaterialRenderProxy* MaterialProxy = ((FNoesisMaterial*)Batch.pixelShader)->GetRenderProxy();
+			static const int32 MaterialPSOCollectorIndex = FPSOCollectorCreateManager::GetIndex(GetFeatureLevelShadingPath(FeatureLevel), NoesisMaterialPSOCollectorName);
 			PSOCollectorStats::CheckFullPipelineStateInCache(GraphicsPSOInit, EPSOPrecacheResult::Unknown, MaterialProxy, nullptr, nullptr, MaterialPSOCollectorIndex);
 		}
 #endif // PSO_PRECACHING_VALIDATE
@@ -3266,8 +1786,7 @@ void FNoesisRenderDevice::DrawBatch(const Noesis::Batch& Batch)
 #if PSO_PRECACHING_VALIDATE
 		if (PSOCollectorStats::IsFullPrecachingValidationEnabled())
 		{
-			static const int32 MaterialPSOCollectorIndex = FPSOCollectorCreateManager::GetIndex(GetFeatureLevelShadingPath(GMaxRHIFeatureLevel), NoesisMaterialPSOCollectorName);
-			FMaterialRenderProxy* MaterialProxy = ((FNoesisMaterial*)Batch.pixelShader)->GetRenderProxy();
+			static const int32 MaterialPSOCollectorIndex = FPSOCollectorCreateManager::GetIndex(GetFeatureLevelShadingPath(FeatureLevel), NoesisMaterialPSOCollectorName);
 			PSOCollectorStats::CheckFullPipelineStateInCache(GraphicsPSOInit, EPSOPrecacheResult::Unknown, MaterialProxy, nullptr, nullptr, MaterialPSOCollectorIndex);
 		}
 #endif // PSO_PRECACHING_VALIDATE
@@ -3336,7 +1855,7 @@ void FNoesisRenderDevice::DrawBatch(const Noesis::Batch& Batch)
 		{
 			CustomEffectPixelShader->SetDisplayGammaAndInvertAlphaAndContrast(*RHICmdList, Gamma, 0.0f, Contrast);
 		}
-		if (!SetPixelShaderParameters(Batch, CustomEffectPixelShader, PSUniformBuffer0, PSUniformBuffer1))
+		if (!SetPixelShaderParameters(Batch, MaterialProxy, Material, CustomEffectPixelShader, PSUniformBuffer0, PSUniformBuffer1))
 			return;
 	}
 	else if (UsingMaterialShader)
@@ -3345,7 +1864,7 @@ void FNoesisRenderDevice::DrawBatch(const Noesis::Batch& Batch)
 		{
 			MaterialPixelShader->SetDisplayGammaAndInvertAlphaAndContrast(*RHICmdList, Gamma, 0.0f, Contrast);
 		}
-		if (!SetPixelShaderParameters(Batch, MaterialPixelShader, PSUniformBuffer0, PSUniformBuffer1))
+		if (!SetPixelShaderParameters(Batch, MaterialProxy, Material, MaterialPixelShader, PSUniformBuffer0, PSUniformBuffer1))
 			return;
 	}
 	else
@@ -3354,7 +1873,7 @@ void FNoesisRenderDevice::DrawBatch(const Noesis::Batch& Batch)
 		{
 			PixelShader->SetDisplayGammaAndInvertAlphaAndContrast(*RHICmdList, Gamma, 0.0f, Contrast);
 		}
-		if (!SetPixelShaderParameters(Batch, PixelShader, PSUniformBuffer0, PSUniformBuffer1))
+		if (!SetPixelShaderParameters(Batch, nullptr, nullptr, PixelShader, PSUniformBuffer0, PSUniformBuffer1))
 			return;
 	}
 
@@ -3380,9 +1899,9 @@ static void AddPSOInitializer(FRHIDepthStencilState* DepthStencilState, FRHIBlen
 	GraphicsPSOInit.BoundShaderState.VertexShaderRHI = VertexShader;
 	GraphicsPSOInit.BoundShaderState.PixelShaderRHI = PixelShader;
 	GraphicsPSOInit.PrimitiveType = PT_TriangleList;
-
-	GraphicsPSOInit.StatePrecachePSOHash = RHIComputeStatePrecachePSOHash(GraphicsPSOInit);
 	ApplyTargetsInfo(GraphicsPSOInit, RenderTargetsInfo);
+	//This could use RenderTargetsInfo depending on the platform
+	GraphicsPSOInit.StatePrecachePSOHash = RHIComputeStatePrecachePSOHash(GraphicsPSOInit);
 
 	FPSOPrecacheData PSOPrecacheData;
 	PSOPrecacheData.bRequired = true;
@@ -3396,8 +1915,9 @@ static void AddPSOInitializer(FRHIDepthStencilState* DepthStencilState, FRHIBlen
 	PSOInitializers.Add(MoveTemp(PSOPrecacheData));
 }
 
-static void AddPSOInitializers(uint8 ShaderCode, uint8 StateCode, FRHIPixelShader* PixelShader,
-	bool IsLinearColor, bool SinglePassStereo, bool GammaCorrection,
+static void AddPSOInitializers(FGlobalShaderMap* GlobalShaderMap, const FSceneTexturesConfig& SceneTexturesConfig,
+	uint8 ShaderCode, uint8 StateCode, FRHIPixelShader* PixelShader,
+	bool IsLinearColor, bool SinglePassStereo, bool GammaCorrection, bool AlphaMask,
 	int32 PSOCollectorIndex, TArray<FPSOPrecacheData>& PSOInitializers)
 {
 	Noesis::Shader Shader;
@@ -3408,24 +1928,29 @@ static void AddPSOInitializers(uint8 ShaderCode, uint8 StateCode, FRHIPixelShade
 
 	if (Noesis::RenderDevice::IsValidState(Shader, RenderState))
 	{
-		FRHIDepthStencilState* DepthStencilState = GetDepthStencilState(RenderState.f.stencilMode);
+		const uint32 VertexShaderCode = Noesis::VertexForShader[ShaderCode];
+		const int32 VertexFormatCode = Noesis::FormatForVertex[VertexShaderCode];
+		FRHIVertexDeclaration* VertexDeclaration = GetVertexDelcaration((Noesis::Shader::Vertex::Format::Enum)VertexFormatCode);
+		
+		FRHIDepthStencilState* DepthStencilState = GetDepthStencilState(RenderState.f.stencilMode, AlphaMask);
 		FRHIBlendState* BlendState = RenderState.f.colorEnable ? GetBlendState(RenderState.f.blendMode) : TStaticBlendState<CW_NONE>::GetRHI();
-		FRHIBlendState* BlendStateWorldUI = RenderState.f.colorEnable ? GetBlendStateWorldUI(RenderState.f.blendMode) : TStaticBlendState<CW_NONE>::GetRHI();
+		FRHIBlendState* BlendStateWorldUI = AlphaMask ? TStaticBlendState<CW_RGBA>::GetRHI() : (RenderState.f.colorEnable ? GetBlendStateWorldUI(RenderState.f.blendMode) : TStaticBlendState<CW_NONE>::GetRHI());
 		FRHIRasterizerState* RasterizerState = RenderState.f.wireframe ? TStaticRasterizerState<FM_Wireframe, CM_None>::GetRHI() : TStaticRasterizerState<FM_Solid, CM_None>::GetRHI();
 
-		uint32 VertexShaderCode = Noesis::VertexForShader[ShaderCode];
-		uint8 VertexShaderFlags = (SinglePassStereo ? VSFlags::Stereo : VSFlags::None) | (IsLinearColor ? VSFlags::LinearColor : VSFlags::None);
-		FRHIVertexShader* VertexShader = GetVertexShader((Noesis::Shader::Vertex::Enum)VertexShaderCode, VertexShaderFlags).GetVertexShader();
+		FNoesisVS::FPermutationDomain VSPermutation;
+		VSPermutation.Set<FNoesisVS::FVertexShader>(VertexShaderCode);
+		VSPermutation.Set<FNoesisVS::FStereo>(SinglePassStereo);
+		VSPermutation.Set<FNoesisVS::FLinearColor>(IsLinearColor);
 
-		uint32 VertexFormatCode = Noesis::FormatForVertex[VertexShaderCode];
-		FRHIVertexDeclaration* VertexDeclaration = GetVertexDelcaration((Noesis::Shader::Vertex::Format::Enum)VertexFormatCode);
+		TShaderRef<FNoesisVS> VertexShaderRef = GlobalShaderMap->GetShader<FNoesisVS>(VSPermutation);
+		FRHIVertexShader* VertexShader = VertexShaderRef.GetVertexShader();
 
 		if (IsLinearColor)
 		{
 			FGraphicsPipelineRenderTargetsInfo RenderTargetsInfo;
-			AddRenderTargetInfo(PF_FloatRGBA, TexCreate_RenderTargetable, RenderTargetsInfo);
+			AddRenderTargetInfo(AlphaMask ? PF_A16B16G16R16 : PF_FloatRGBA, TexCreate_RenderTargetable, RenderTargetsInfo);
 			RenderTargetsInfo.NumSamples = 1;
-			SetupDepthStencilInfo(PF_DepthStencil, TexCreate_DepthStencilTargetable | TexCreate_Memoryless, ERenderTargetLoadAction::ENoAction, ERenderTargetLoadAction::EClear, FExclusiveDepthStencil::DepthNop_StencilWrite, RenderTargetsInfo);
+			SetupDepthStencilInfo(PF_DepthStencil, TexCreate_DepthStencilTargetable | TexCreate_Memoryless, ERenderTargetLoadAction::ENoAction, ERenderTargetLoadAction::EClear, AlphaMask ? FExclusiveDepthStencil::DepthWrite_StencilWrite : FExclusiveDepthStencil::DepthRead_StencilWrite, RenderTargetsInfo);
 
 			AddPSOInitializer(DepthStencilState, BlendStateWorldUI, RasterizerState,
 				VertexShader, VertexDeclaration, PixelShader,
@@ -3434,8 +1959,12 @@ static void AddPSOInitializers(uint8 ShaderCode, uint8 StateCode, FRHIPixelShade
 		}
 		else
 		{
+			static const auto CVarDefaultBackBufferPixelFormat = IConsoleManager::Get().FindTConsoleVariableDataInt(TEXT("r.DefaultBackBufferPixelFormat"));
+			EPixelFormat SceneTargetFormat = EDefaultBackBufferPixelFormat::Convert2PixelFormat(EDefaultBackBufferPixelFormat::FromInt(CVarDefaultBackBufferPixelFormat->GetValueOnAnyThread()));
+			SceneTargetFormat = RHIPreferredPixelFormatHint(SceneTargetFormat);
+				
 			FGraphicsPipelineRenderTargetsInfo RenderTargetsInfo;
-			AddRenderTargetInfo(PF_A2B10G10R10, TexCreate_RenderTargetable, RenderTargetsInfo);
+			AddRenderTargetInfo(SceneTargetFormat, TexCreate_RenderTargetable, RenderTargetsInfo);
 			RenderTargetsInfo.NumSamples = 1;
 			SetupDepthStencilInfo(PF_DepthStencil, TexCreate_DepthStencilTargetable | TexCreate_Memoryless, ERenderTargetLoadAction::ENoAction, ERenderTargetLoadAction::EClear, FExclusiveDepthStencil::DepthNop_StencilWrite, RenderTargetsInfo);
 
@@ -3443,6 +1972,15 @@ static void AddPSOInitializers(uint8 ShaderCode, uint8 StateCode, FRHIPixelShade
 				VertexShader, VertexDeclaration, PixelShader,
 				RenderTargetsInfo,
 				PSOCollectorIndex, PSOInitializers);
+
+			if (GRHISupportsHDROutput && GRHIHDRDisplayOutputFormat != SceneTargetFormat)
+			{
+				RenderTargetsInfo.RenderTargetFormats[0] = GRHIHDRDisplayOutputFormat;
+				AddPSOInitializer(DepthStencilState, BlendState, RasterizerState,
+					VertexShader, VertexDeclaration, PixelShader,
+					RenderTargetsInfo,
+					PSOCollectorIndex, PSOInitializers);
+			}
 		}
 
 		if (!GammaCorrection)
@@ -3473,51 +2011,48 @@ static void AddPSOInitializers(uint8 ShaderCode, uint8 StateCode, FRHIPixelShade
 	}
 }
 
-// If this is enabled, FGlobalPSOCollectorManager::MaxPSOCollectorCount needs to be increased because Unreal already registers
-// the default 4
-#define NOESIS_GLOBAL_PSO_PRECACHING 0
-#if NOESIS_GLOBAL_PSO_PRECACHING
-
 void NoesisGlobalPSOCollector(const FSceneTexturesConfig& SceneTexturesConfig, int32 PSOCollectorIndex, TArray<FPSOPrecacheData>& PSOInitializers)
 {
-	for (bool SinglePassStereo : { false, true})
+	FGlobalShaderMap* ShaderMap = GetGlobalShaderMap(GMaxRHIFeatureLevel);
+	UE::StereoRenderUtils::FStereoShaderAspects Aspects(SceneTexturesConfig.ShaderPlatform);
+	for (int32 PermutationIdx = 0; PermutationIdx < FNoesisPS::FPermutationDomain::PermutationCount; PermutationIdx++)
 	{
-		for (bool PatternIgnoreAlpha : { false, true})
+		FNoesisPS::FPermutationDomain Permutation(PermutationIdx);
+		const bool GammaCorrection = Permutation.Get<FNoesisPS::FGammaCorrection>();
+		const bool LinearColor = Permutation.Get<FNoesisPS::FLinearColor>();
+		const bool AlphaMask = Permutation.Get<FNoesisPS::FAlphaMask>();
+		const Noesis::Shader::Enum ShaderCode = (Noesis::Shader::Enum)Permutation.Get<FNoesisPS::FEffect>();
+
+		if (!ShaderMap->HasShader(&FNoesisPS::GetStaticType(), PermutationIdx))
 		{
-			for (bool PatternLinear : { false, true })
+			continue;
+		}
+
+		if (LinearColor && GammaCorrection)
+		{
+			continue;
+		}
+
+		TShaderRef<FNoesisPS> PixelShader = ShaderMap->GetShader<FNoesisPS>(Permutation);
+		for (bool SinglePassStereo : { false, true })
+		{
+			for (uint32 StateCode = 0; StateCode < 256; StateCode++)
 			{
-				for (bool IsLinearColor : { false, true })
-				{
-					for (bool GammaCorrection : {false, true})
-					{
-						if (IsLinearColor && GammaCorrection)
-							continue;
+				AddPSOInitializers(ShaderMap, SceneTexturesConfig, ShaderCode, StateCode, PixelShader.GetPixelShader(), LinearColor, SinglePassStereo, GammaCorrection, AlphaMask, PSOCollectorIndex, PSOInitializers);
+			}
 
-						for (uint8 ShaderCode = 0; ShaderCode < Noesis::Shader::Count; ShaderCode++)
-						{
-							for (uint32 StateCode = 0; StateCode < 256; StateCode++)
-							{
-								uint8 PixelShaderFlags = (IsLinearColor ? PSFlags::LinearColor : PSFlags::None) | (PatternLinear ? PSFlags::LinearPattern : PSFlags::None)
-									| (GammaCorrection ? PSFlags::GammaCorrection : PSFlags::None) | (PatternIgnoreAlpha ? PSFlags::IgnoreAlpha : PSFlags::None);
-
-								FRHIPixelShader* PixelShader = GetGlobalPixelShader((Noesis::Shader::Enum)ShaderCode, PixelShaderFlags).GetPixelShader();
-
-								if (PixelShader != nullptr)
-								{
-									AddPSOInitializers(ShaderCode, StateCode, PixelShader, IsLinearColor, SinglePassStereo, GammaCorrection, PSOCollectorIndex, PSOInitializers);
-								}
-							}
-						}
-					}
-				}
+			if (!Aspects.IsInstancedStereoEnabled())
+			{
+				break;
 			}
 		}
 	}
 }
 
-FRegisterGlobalPSOCollectorFunction RegisterNoesisGlobalPSOCollector(&NoesisGlobalPSOCollector, NoesisGlobalPSOCollectorName);
-
-#endif // NOESIS_GLOBAL_PSO_PRECACHING
+// If this is enabled, FGlobalPSOCollectorManager::MaxPSOCollectorCount needs to be increased because Unreal already registers
+// the default 4
+constexpr static bool HasExtendedCollectorCount = FGlobalPSOCollectorManager::MaxPSOCollectorCount > 4;
+std::conditional_t<HasExtendedCollectorCount, FRegisterGlobalPSOCollectorFunction, TTuple<GlobalPSOCollectorFunction , const TCHAR*>> RegisterNoesisGlobalPSOCollector(&NoesisGlobalPSOCollector, NoesisGlobalPSOCollectorName);
 
 class FNoesisMaterialPSOCollector : public IPSOCollector
 {
@@ -3549,74 +2084,76 @@ void FNoesisMaterialPSOCollector::CollectPSOInitializers(
 	TArray<FPSOPrecacheData>& PSOInitializers
 )
 {
+	if (VertexFactoryData.VertexFactoryType != &FLocalVertexFactory::StaticType)
+		return;
+
 	if (Material.IsUIMaterial() || Material.IsPostProcessMaterial())
 	{
-		for (bool SinglePassStereo : { false, true})
+		UE::StereoRenderUtils::FStereoShaderAspects Aspects(SceneTexturesConfig.ShaderPlatform);
+		FGlobalShaderMap* GlobalShaderMap = GetGlobalShaderMap(FeatureLevel);
+
+		if (Material.IsPostProcessMaterial())
 		{
-			for (bool IsLinearColor : { false, true })
+			for (int32 PermutationIdx = 0; PermutationIdx < FNoesisCustomEffectPS::FPermutationDomain::PermutationCount; PermutationIdx++)
 			{
-				for (bool GammaCorrection : { false, true })
+				FNoesisCustomEffectPS::FPermutationDomain Permutation(PermutationIdx);
+				const bool GammaCorrection = Permutation.Get<FNoesisCustomEffectPS::FGammaCorrection>();
+				const bool AlphaMask = Permutation.Get<FNoesisCustomEffectPS::FAlphaMask>();
+				TShaderRef<FNoesisCustomEffectPS> PixelShader = GetMaterialPixelShader<FNoesisCustomEffectPS>(Material, Permutation);
+				if (!PixelShader.IsValid())
 				{
-					if (IsLinearColor && GammaCorrection)
+					continue;
+				}
+
+				for (bool LinearColor : { false, true })
+				{
+					if (LinearColor && GammaCorrection)
 						continue;
 
-					if (Material.IsPostProcessMaterial())
+					for (bool SinglePassStereo : { false, true })
 					{
 						for (uint32 StateCode = 0; StateCode < 256; StateCode++)
 						{
-							FRHIPixelShader* PixelShader = GetCustomEffectPixelShader(&Material, IsLinearColor, GammaCorrection).GetPixelShader();
+							AddPSOInitializers(GlobalShaderMap, SceneTexturesConfig, Noesis::Shader::Custom_Effect, StateCode, PixelShader.GetPixelShader(), LinearColor, SinglePassStereo, GammaCorrection, AlphaMask, PSOCollectorIndex, PSOInitializers);
+						}
 
-							if (PixelShader != nullptr)
-							{
-								AddPSOInitializers((uint8)Noesis::Shader::Custom_Effect, StateCode, PixelShader, IsLinearColor, SinglePassStereo, GammaCorrection, PSOCollectorIndex, PSOInitializers);
-							}
+						if (!Aspects.IsInstancedStereoEnabled())
+						{
+							break;
 						}
 					}
+				}
+			}
+		}
+		else if (Material.IsUIMaterial())
+		{
+			for (int32 PermutationIdx = 0; PermutationIdx < FNoesisMaterialPS::FPermutationDomain::PermutationCount; PermutationIdx++)
+			{
+				FNoesisMaterialPS::FPermutationDomain Permutation(PermutationIdx);
+				const bool GammaCorrection = Permutation.Get<FNoesisMaterialPS::FGammaCorrection>();
+				const bool AlphaMask = Permutation.Get<FNoesisMaterialPS::FAlphaMask>();
+				const bool LinearColor = Permutation.Get<FNoesisMaterialPS::FLinearColor>();
+				const Noesis::Shader::Enum ShaderCode = (Noesis::Shader::Enum)Permutation.Get<FNoesisMaterialPS::FEffect>();
 
-					TArray<Noesis::Shader::Enum> Shaders = {
-						Noesis::Shader::Path_Pattern,
-						Noesis::Shader::Path_Pattern_Clamp,
-						Noesis::Shader::Path_Pattern_Repeat,
-						Noesis::Shader::Path_Pattern_MirrorU,
-						Noesis::Shader::Path_Pattern_MirrorV,
-						Noesis::Shader::Path_Pattern_Mirror,
-						Noesis::Shader::Path_AA_Pattern,
-						Noesis::Shader::Path_AA_Pattern_Clamp,
-						Noesis::Shader::Path_AA_Pattern_Repeat,
-						Noesis::Shader::Path_AA_Pattern_MirrorU,
-						Noesis::Shader::Path_AA_Pattern_MirrorV,
-						Noesis::Shader::Path_AA_Pattern_Mirror,
-						Noesis::Shader::SDF_Pattern,
-						Noesis::Shader::SDF_Pattern_Clamp,
-						Noesis::Shader::SDF_Pattern_Repeat,
-						Noesis::Shader::SDF_Pattern_MirrorU,
-						Noesis::Shader::SDF_Pattern_MirrorV,
-						Noesis::Shader::SDF_Pattern_Mirror,
-						Noesis::Shader::SDF_LCD_Pattern,
-						Noesis::Shader::SDF_LCD_Pattern_Clamp,
-						Noesis::Shader::SDF_LCD_Pattern_Repeat,
-						Noesis::Shader::SDF_LCD_Pattern_MirrorU,
-						Noesis::Shader::SDF_LCD_Pattern_MirrorV,
-						Noesis::Shader::SDF_LCD_Pattern_Mirror,
-						Noesis::Shader::Opacity_Pattern,
-						Noesis::Shader::Opacity_Pattern_Clamp,
-						Noesis::Shader::Opacity_Pattern_Repeat,
-						Noesis::Shader::Opacity_Pattern_MirrorU,
-						Noesis::Shader::Opacity_Pattern_MirrorV,
-						Noesis::Shader::Opacity_Pattern_Mirror,
-					};
+				TShaderRef<FNoesisMaterialPS> PixelShader = GetMaterialPixelShader<FNoesisMaterialPS>(Material, Permutation);
+				if (!PixelShader.IsValid())
+				{
+					continue;
+				}
 
-					for (Noesis::Shader::Enum ShaderCode : Shaders)
+				if (LinearColor && GammaCorrection)
+					continue;
+
+				for (bool SinglePassStereo : { false, true })
+				{
+					for (uint32 StateCode = 0; StateCode < 256; StateCode++)
 					{
-						for (uint32 StateCode = 0; StateCode < 256; StateCode++)
-						{
-							FRHIPixelShader* PixelShader = GetMaterialPixelShader(&Material, ShaderCode, IsLinearColor, GammaCorrection).GetPixelShader();
+						AddPSOInitializers(GlobalShaderMap, SceneTexturesConfig, ShaderCode, StateCode, PixelShader.GetPixelShader(), LinearColor, SinglePassStereo, GammaCorrection, AlphaMask, PSOCollectorIndex, PSOInitializers);
+					}
 
-							if (PixelShader != nullptr)
-							{
-								AddPSOInitializers(ShaderCode, StateCode, PixelShader, IsLinearColor, SinglePassStereo, GammaCorrection, PSOCollectorIndex, PSOInitializers);
-							}
-						}
+					if (!Aspects.IsInstancedStereoEnabled())
+					{
+						break;
 					}
 				}
 			}

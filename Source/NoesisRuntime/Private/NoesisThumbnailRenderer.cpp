@@ -104,7 +104,7 @@ void FNoesisThumbnailRenderer::Render(UWorld* World, FIntRect ViewportRect, cons
 				.SetClearValue(ClearValue);
 			FTextureRHIRef DepthStencilTarget = RHICreateTexture(DepthStencilTargetDesc);
 	#endif
-			NOESIS_BIND_DEBUG_TEXTURE_LABEL(DepthStencilTarget, Name);
+			NOESIS_BIND_DEBUG_TEXTURE_LABEL(RHICmdList, DepthStencilTarget, Name);
 
 			FRHIRenderPassInfo RPInfo(ColorTarget, ERenderTargetActions::DontLoad_Store, DepthStencilTarget,
 				MakeDepthStencilTargetActions(ERenderTargetActions::DontLoad_DontStore, ERenderTargetActions::Clear_DontStore), FExclusiveDepthStencil::DepthNop_StencilWrite);

@@ -38,7 +38,7 @@ public:
 	void OnTransformUpdated(USceneComponent* UpdatedComponent, EUpdateTransformFlags UpdateTransformFlags, ETeleportType Teleport);
 
 	UPROPERTY(EditAnywhere, Category = Noesis)
-	UNoesisXaml* Xaml;
+	TObjectPtr<UNoesisXaml> Xaml;
 
 	UPROPERTY(EditAnywhere, Category = Noesis)
 	float Scale;

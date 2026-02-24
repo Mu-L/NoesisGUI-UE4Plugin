@@ -31,14 +31,14 @@ class NOESISRUNTIME_API UNoesisRive : public UObject
 	TArray<uint8> Content;
 
 	UPROPERTY()
-	TArray<class UTexture2D*> Textures;
+	TArray<TObjectPtr<class UTexture2D>> Textures;
 
 	UPROPERTY()
-	TArray<class UFontFace*> FontFaces;
+	TArray<TObjectPtr<class UFontFace>> FontFaces;
 
 #if WITH_EDITORONLY_DATA
 	UPROPERTY(VisibleAnywhere, Instanced, Category = ImportSettings)
-	class UAssetImportData* AssetImportData;
+	TObjectPtr<class UAssetImportData> AssetImportData;
 
 	// UObject interface
 	virtual void PostInitProperties() override;

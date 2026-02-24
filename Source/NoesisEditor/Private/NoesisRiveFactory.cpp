@@ -87,14 +87,14 @@ UObject* UNoesisRiveFactory::FactoryCreateBinary(UClass* Class, UObject* Parent,
 	Noesis::MemoryStream RiveStream(Buffer, BufferLength);
 	Noesis::Vector<Noesis::Uri> ImageDependencies;
 	Noesis::Vector<Noesis::Uri> FontDependencies;
-	NoesisApp::GetRiveDependencies(&RiveStream, TCHAR_TO_UTF8(*Uri), ImageDependencies, FontDependencies);
+	NoesisApp::GetRiveDependencies(&RiveStream, (ANSICHAR*)StringCast<UTF8CHAR>(*Uri).Get(), ImageDependencies, FontDependencies);
 
 	for (const auto& Dependency : ImageDependencies)
 	{
 		Noesis::String DependencyPath;
 		Dependency.GetPath(DependencyPath);
-		FString FilePath = FileDirectory / FPaths::GetCleanFilename(UTF8_TO_TCHAR(DependencyPath.Str()));
-		FString AssetPath = PackageRoot / PackagePath / ObjectTools::SanitizeInvalidChars(FPaths::GetBaseFilename(UTF8_TO_TCHAR(DependencyPath.Str())), INVALID_LONGPACKAGE_CHARACTERS);
+		FString FilePath = FileDirectory / FPaths::GetCleanFilename(StringCast<TCHAR>((UTF8CHAR*)DependencyPath.Str()).Get());
+		FString AssetPath = PackageRoot / PackagePath / ObjectTools::SanitizeInvalidChars(FPaths::GetBaseFilename(StringCast<TCHAR>((UTF8CHAR*)DependencyPath.Str()).Get()), INVALID_LONGPACKAGE_CHARACTERS);
 
 		UObject* Asset = GetDependency(FilePath, AssetPath);
 		if (Asset != nullptr && Asset->IsA<UTexture2D>())
@@ -107,8 +107,8 @@ UObject* UNoesisRiveFactory::FactoryCreateBinary(UClass* Class, UObject* Parent,
 	{
 		Noesis::String DependencyPath;
 		Dependency.GetPath(DependencyPath);
-		FString FilePath = FileDirectory / FPaths::GetCleanFilename(UTF8_TO_TCHAR(DependencyPath.Str()));
-		FString AssetPath = PackageRoot / PackagePath / ObjectTools::SanitizeInvalidChars(FPaths::GetBaseFilename(UTF8_TO_TCHAR(DependencyPath.Str())), INVALID_LONGPACKAGE_CHARACTERS);
+		FString FilePath = FileDirectory / FPaths::GetCleanFilename(StringCast<TCHAR>((UTF8CHAR*)DependencyPath.Str()).Get());
+		FString AssetPath = PackageRoot / PackagePath / ObjectTools::SanitizeInvalidChars(FPaths::GetBaseFilename(StringCast<TCHAR>((UTF8CHAR*)DependencyPath.Str()).Get()), INVALID_LONGPACKAGE_CHARACTERS);
 
 		UObject* Asset = GetDependency(FilePath, AssetPath);
 		if (Asset != nullptr && Asset->IsA<UFontFace>())

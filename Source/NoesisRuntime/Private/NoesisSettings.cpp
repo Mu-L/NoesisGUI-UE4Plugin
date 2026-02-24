@@ -27,7 +27,7 @@ UNoesisSettings::UNoesisSettings(const FObjectInitializer& ObjectInitializer)
 	: Super(ObjectInitializer)
 {
 	OffscreenTextureSampleCount = ENoesisOffscreenSampleCount::One;
-	GlyphTextureSize = ENoesisGlyphCacheDimensions::x1024;
+	GlyphTextureSize = ENoesisGlyphCacheDimensions::x2048;
 	ApplicationResources = FSoftObjectPath("/NoesisGUI/Theme/NoesisTheme_DarkBlue.NoesisTheme_DarkBlue");
 	DefaultFonts.Add(FSoftObjectPath("/NoesisGUI/Theme/Fonts/PT_Root_UI_Regular.PT_Root_UI_Regular"));
 	DefaultFonts.Add(FSoftObjectPath("/NoesisGUI/Theme/Fonts/PT_Root_UI_Bold.PT_Root_UI_Bold"));
@@ -46,7 +46,7 @@ UNoesisSettings::UNoesisSettings(const FObjectInitializer& ObjectInitializer)
 
 void UNoesisSettings::SetLicense() const
 {
-	Noesis::GUI::SetLicense(TCHAR_TO_UTF8(*LicenseName), TCHAR_TO_UTF8(*LicenseKey));
+	Noesis::GUI::SetLicense((ANSICHAR*)StringCast<UTF8CHAR>(*LicenseName).Get(), (ANSICHAR*)StringCast<UTF8CHAR>(*LicenseKey).Get());
 }
 
 static uint32 ApplicationResourcesHash;
@@ -126,7 +126,7 @@ void UNoesisSettings::SetFontFallbacks() const
 
 			UPackage* Package = FontFace->GetOutermost();
 			FPackageName::SplitLongPackageName(Package->GetPathName(), PackageRoot, PackagePath, PackageName, false);
-			PathStr = TCHAR_TO_UTF8(*(PackageRoot.LeftChop(1) + ";component" / PackagePath / "#"));
+			PathStr = (ANSICHAR*)StringCast<UTF8CHAR>(*(PackageRoot.LeftChop(1) + ";component" / PackagePath / "#")).Get();
 
 #if !WITH_EDITORONLY_DATA
 			if (FontFace->GetLoadingPolicy() != EFontLoadingPolicy::Inline)

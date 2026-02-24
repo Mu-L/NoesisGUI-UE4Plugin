@@ -27,7 +27,7 @@ public:
     Noesis::Ptr<Noesis::BaseComponent> Evaluate() const
     {
         FString DisplayString = mExtension->GetDisplayString(mTargetObject);
-        return Noesis::Boxing::Box(TCHAR_TO_UTF8(*DisplayString));
+        return Noesis::Boxing::Box((ANSICHAR*)StringCast<UTF8CHAR>(*DisplayString).Get());
     }
 
     Noesis::Ptr<Noesis::Expression> Reapply(Noesis::DependencyObject* targetObject, const Noesis::DependencyProperty* targetProperty) const
@@ -110,11 +110,11 @@ FString LocTextExtension::GetDisplayString(Noesis::DependencyObject* object)
         ns = object->GetValue<Noesis::String>(NamespaceProperty).Str();
     }
     FText Text;
-    FString Source(UTF8_TO_TCHAR(GetSource()));
+    FString Source(StringCast<TCHAR>((UTF8CHAR*)GetSource()).Get());
 #if UE_VERSION_OLDER_THAN(5, 5, 0)
-    FText::FindText(UTF8_TO_TCHAR(ns), UTF8_TO_TCHAR(GetKey()), Text, &Source);
+    FText::FindText(StringCast<TCHAR>((UTF8CHAR*)ns).Get(), StringCast<TCHAR>((UTF8CHAR*)GetKey()).Get(), Text, &Source);
 #else
-    FText::FindTextInLiveTable_Advanced(UTF8_TO_TCHAR(ns), UTF8_TO_TCHAR(GetKey()), Text, &Source);
+    FText::FindTextInLiveTable_Advanced(StringCast<TCHAR>((UTF8CHAR*)ns).Get(), StringCast<TCHAR>((UTF8CHAR*)GetKey()).Get(), Text, &Source);
 #endif
     return Text.ToString();
 }

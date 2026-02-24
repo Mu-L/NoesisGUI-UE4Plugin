@@ -72,7 +72,7 @@ void InputActionTrigger::RegisterAction(const char* action, InputActionType type
 {
     if (mInstance != nullptr && !Noesis::StrIsEmpty(action))
     {
-        FInputActionBinding binding(UTF8_TO_TCHAR(action), (EInputEvent)type);
+        FInputActionBinding binding(StringCast<TCHAR>((UTF8CHAR*)action).Get(), (EInputEvent)type);
         binding.ActionDelegate.GetDelegateForManualSet().BindRaw(this, &InputActionTrigger::OnInputAction);
         mInstance->RegisterInputAction(binding);
     }
@@ -83,7 +83,7 @@ void InputActionTrigger::UnregisterAction(const char* action, InputActionType ty
 {
     if (mInstance != nullptr && !Noesis::StrIsEmpty(action))
     {
-        FInputActionBinding binding(UTF8_TO_TCHAR(action), (EInputEvent)type);
+        FInputActionBinding binding(StringCast<TCHAR>((UTF8CHAR*)action).Get(), (EInputEvent)type);
         mInstance->UnregisterInputAction(binding);
     }
 }

@@ -513,7 +513,7 @@ public:
 				return (*Callback)(Uri, Type);
 			};
 			FString Uri = Xaml->GetXamlUri();
-			Noesis::GUI::GetXamlDependencies(&XamlStream, TCHAR_TO_UTF8(*Uri), &DependencyCallback, DependencyCallbackAdaptor);
+			Noesis::GUI::GetXamlDependencies(&XamlStream, (ANSICHAR*)StringCast<UTF8CHAR>(*Uri).Get(), &DependencyCallback, DependencyCallbackAdaptor);
 		}
 	}
 

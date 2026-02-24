@@ -72,6 +72,6 @@ FNoesisKeyTime::FNoesisKeyTime(const Noesis::KeyTime& KeyTime)
 Noesis::KeyTime FNoesisKeyTime::ToNoesis() const
 {
 	Noesis::KeyTime KeyTime;
-	Noesis::KeyTime::TryParse(TCHARToNsString(*TextForm).Str(), KeyTime);
+	Noesis::KeyTime::TryParse((ANSICHAR*)StringCast<UTF8CHAR>(*TextForm).Get(), KeyTime);
 	return KeyTime;
 }

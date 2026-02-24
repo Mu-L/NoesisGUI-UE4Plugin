@@ -91,7 +91,7 @@ void EnhancedInputActionTrigger::RegisterAction()
             ETriggerEvent TriggerEvent = (ETriggerEvent)GetTriggerEvent();
             if (Action == nullptr)
             {
-                NS_LOG("InputAction %s not found (URI: %s)", *ActionPath, UTF8_TO_TCHAR(ActionUri.Str()));
+                NS_LOG("InputAction %s not found (URI: %s)", *ActionPath, (UTF8CHAR*)ActionUri.Str());
                 return;
             }
 

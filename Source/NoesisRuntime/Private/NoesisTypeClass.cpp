@@ -39,6 +39,9 @@
 #else
 #endif
 
+// FieldNotification includes
+#include "INotifyFieldValueChanged.h"
+
 // MediaAsset includes
 #include "MediaTexture.h"
 #include "MediaSource.h"
@@ -167,6 +170,24 @@ struct NoesisTypeTraits<FColor>
 #endif
 	}
 	static bool Equals(const FColor& Left, const FColor& Right)
+	{
+		return Left == Right;
+	}
+};
+
+template<>
+struct NoesisTypeTraits<FLinearColor>
+{
+	typedef Noesis::Color NoesisType;
+	static Noesis::Color ToNoesis(const FLinearColor& Value)
+	{
+		return Noesis::Color::FromLinearRGB(Value.A, Value.R, Value.G, Value.B);
+	}
+	static FLinearColor ToUnreal(const Noesis::Color& Value)
+	{
+		return FLinearColor(Noesis::SRGBToLinear(Value.g), Noesis::SRGBToLinear(Value.b), Noesis::SRGBToLinear(Value.a), Noesis::SRGBToLinear(Value.r));
+	}
+	static bool Equals(const FLinearColor& Left, const FLinearColor& Right)
 	{
 		return Left == Right;
 	}
@@ -985,6 +1006,7 @@ void NoesisInitTypeTables()
 	StructTypeInfos =
 	{
 		{TBaseStructure<FColor>::Get(), { &GenericGetter<FColor>, &GenericSetter<FColor>, &GenericGetType<FColor> }},
+		{TBaseStructure<FLinearColor>::Get(), { &GenericGetter<FLinearColor>, &GenericSetter<FLinearColor>, &GenericGetType<FLinearColor> }},
 		{TBaseStructure<FVector2D>::Get(), { &GenericGetter<FVector2D>, &GenericSetter<FVector2D>, &GenericGetType<FVector2D> }},
 		{TBaseStructure<FBox2D>::Get(), { &GenericGetter<FBox2D>, &GenericSetter<FBox2D>, &GenericGetType<FBox2D> }},
 		{TBaseStructure<FNoesisSize>::Get(), { &GenericGetter<FNoesisSize>, &GenericSetter<FNoesisSize>, &GenericGetType<FNoesisSize> }},
@@ -1695,7 +1717,7 @@ protected:
 	bool NativeFind(const char* Key, Noesis::Ptr<Noesis::BaseComponent>& Value) const
 	{
 		FScriptMapHelper MapHelper(MapProperty, MapPointer);
-		FString KeyString = UTF8_TO_TCHAR(Key);
+		FString KeyString = StringCast<TCHAR>((UTF8CHAR*)Key).Get();
 		uint8* PairPtr = MapHelper.FindMapPairPtrFromHash(&KeyString);
 		if (PairPtr)
 		{
@@ -1709,7 +1731,7 @@ protected:
 	void NativeSet(const char* Key, Noesis::BaseComponent* Value)
 	{
 		FScriptMapHelper MapHelper(MapProperty, MapPointer);
-		FString KeyString = UTF8_TO_TCHAR(Key);
+		FString KeyString = StringCast<TCHAR>((UTF8CHAR*)Key).Get();
 		uint8* PairPtr = MapHelper.FindMapPairPtrFromHash(&KeyString);
 		if (PairPtr)
 		{
@@ -1721,7 +1743,7 @@ protected:
 	void NativeAdd(const char* Key, Noesis::BaseComponent* Value)
 	{
 		FScriptMapHelper MapHelper(MapProperty, MapPointer);
-		FString KeyString = UTF8_TO_TCHAR(Key);
+		FString KeyString = StringCast<TCHAR>((UTF8CHAR*)Key).Get();
 		FProperty* ValueProperty = MapProperty->ValueProp;
 		uint8* PairPtr = MapHelper.FindMapPairPtrFromHash(&KeyString);
 		if (!PairPtr)
@@ -1736,7 +1758,7 @@ protected:
 	void NativeRemove(const char* Key)
 	{
 		FScriptMapHelper MapHelper(MapProperty, MapPointer);
-		FString KeyString = UTF8_TO_TCHAR(Key);
+		FString KeyString = StringCast<TCHAR>((UTF8CHAR*)Key).Get();
 		FProperty* ValueProperty = MapProperty->ValueProp;
 		uint8* PairPtr = MapHelper.FindMapPairPtrFromHash(&KeyString);
 		if (PairPtr)
@@ -2002,6 +2024,58 @@ public:
 		UMaterialInterface* Material;
 	};
 
+	TArray<TPair<UE::FieldNotification::FFieldId, FName>> FieldNotifications;
+	TArray<TPair<UE::FieldNotification::FFieldId, FName>> ArrayFieldNotifications;
+	TArray<TPair<UE::FieldNotification::FFieldId, FName>> MapFieldNotifications;
+
+	void AddFieldNotification(UE::FieldNotification::FFieldId FieldId, FName PropertyName)
+	{
+		FieldNotifications.Add({ FieldId, PropertyName });
+	}
+
+	void AddArrayFieldNotification(UE::FieldNotification::FFieldId FieldId, FName PropertyName)
+	{
+		ArrayFieldNotifications.Add({ FieldId, PropertyName });
+	}
+
+	void AddMapFieldNotification(UE::FieldNotification::FFieldId FieldId, FName PropertyName)
+	{
+		MapFieldNotifications.Add({ FieldId, PropertyName });
+	}
+
+	void SetObjectFieldNotifications(UObject* Object) const
+	{
+		check(Class->IsA<UClass>());
+
+		if (((UClass*)Class)->ImplementsInterface(UNotifyFieldValueChanged::StaticClass()))
+		{
+			TScriptInterface<INotifyFieldValueChanged> Interface = Object;
+			for (auto& FieldNotification : FieldNotifications)
+			{
+				Interface->AddFieldValueChangedDelegate(FieldNotification.Key, INotifyFieldValueChanged::FFieldValueChangedDelegate::CreateLambda([PropertyName = FieldNotification.Value](UObject* Object, UE::FieldNotification::FFieldId Id)
+				{
+					NoesisNotifyPropertyChanged(Object, PropertyName);
+				}));
+			}
+
+			for (auto& FieldNotification : ArrayFieldNotifications)
+			{
+				Interface->AddFieldValueChangedDelegate(FieldNotification.Key, INotifyFieldValueChanged::FFieldValueChangedDelegate::CreateLambda([PropertyName = FieldNotification.Value](UObject* Object, UE::FieldNotification::FFieldId Id)
+				{
+					NoesisNotifyArrayPropertyChanged(Object, PropertyName);
+				}));
+			}
+
+			for (auto& FieldNotification : MapFieldNotifications)
+			{
+				Interface->AddFieldValueChangedDelegate(FieldNotification.Key, INotifyFieldValueChanged::FFieldValueChangedDelegate::CreateLambda([PropertyName = FieldNotification.Value](UObject* Object, UE::FieldNotification::FFieldId Id)
+				{
+					NoesisNotifyMapPropertyChanged(Object, PropertyName);
+				}));
+			}
+		}
+	}
+
 	int32 GetStructureSize() const
 	{
 		return Class->GetStructureSize();
@@ -2121,6 +2195,9 @@ public:
 		Noesis::BaseComponent(), Object(InObject)
 	{
 		ObjectMap.Add(Object, this);
+
+		const NoesisTypeClass* TypeClass = (const NoesisTypeClass*)NoesisCreateTypeClassForUClass(Object->GetClass());
+		TypeClass->SetObjectFieldNotifications(Object);
 	}
 
 	~NoesisObjectWrapper();
@@ -2666,7 +2743,7 @@ DEFINE_FUNCTION(execNoesisDelegate)
 	if (Wrapper != nullptr)
 	{
 		auto TypeClass = (NoesisTypeClass*)Wrapper->GetClassType();
-		Noesis::TypeClassEvent ClassEvent = Noesis::FindEvent(TypeClass, Noesis::Symbol(TCHAR_TO_UTF8(*EventName)));
+		Noesis::TypeClassEvent ClassEvent = Noesis::FindEvent(TypeClass, Noesis::Symbol((ANSICHAR*)StringCast<UTF8CHAR>(*EventName).Get()));
 		auto TypeProperty = (NoesisTypePropertyObjectWrapperEvent*)ClassEvent.event;
 		if (TypeProperty != nullptr)
 		{
@@ -2915,7 +2992,7 @@ void NoesisFillTypeClassForUStruct(NoesisTypeClass* TypeClass, UScriptStruct* Cl
 			ensure(PropertyName.FindLastChar(TEXT('_'), UnderscorePosition));
 			PropertyName = PropertyName.LeftChop(PropertyName.Len() - UnderscorePosition);
 		}
-		Noesis::Symbol PropertyId = Noesis::Symbol(TCHAR_TO_UTF8(*PropertyName));
+		Noesis::Symbol PropertyId = Noesis::Symbol((ANSICHAR*)StringCast<UTF8CHAR>(*PropertyName).Get());
 
 		const Noesis::Type* PropertyType = GetPropertyType(Property);
 		if (PropertyType != nullptr)
@@ -2939,6 +3016,9 @@ void NoesisFillTypeClassForUClass(NoesisTypeClass* TypeClass, UClass* Class)
 	check(TypeClass);
 
 	TypeClass->AddBase(ParentType);
+
+	bool ImplementsNotifyFieldValueChanged = Class->ImplementsInterface(UNotifyFieldValueChanged::StaticClass());
+	TScriptInterface<INotifyFieldValueChanged> Interface = ImplementsNotifyFieldValueChanged ? Class->GetDefaultObject() : nullptr;
 
 	for (TFieldIterator<UFunction> FunctionIt(Class, EFieldIteratorFlags::ExcludeSuper); FunctionIt; ++FunctionIt)
 	{
@@ -2974,7 +3054,7 @@ void NoesisFillTypeClassForUClass(NoesisTypeClass* TypeClass, UClass* Class)
 
 			if (HasNoParams)
 			{
-				NoesisTypeProperty* TypeProperty = new NoesisTypePropertyObjectWrapperCommand(Noesis::Symbol(TCHAR_TO_UTF8(*Function->GetName())), Noesis::TypeOf<NoesisFunctionWrapper>(), Function, CanExecuteFunction);
+				NoesisTypeProperty* TypeProperty = new NoesisTypePropertyObjectWrapperCommand(Noesis::Symbol((ANSICHAR*)StringCast<UTF8CHAR>(*Function->GetName()).Get()), Noesis::TypeOf<NoesisFunctionWrapper>(), Function, CanExecuteFunction);
 				TypeClass->AddProperty(TypeProperty);
 			}
 			else
@@ -2982,7 +3062,7 @@ void NoesisFillTypeClassForUClass(NoesisTypeClass* TypeClass, UClass* Class)
 				const Noesis::Type* ParamType = GetPropertyType(Param);
 				if (ParamType != nullptr)
 				{
-					NoesisTypeProperty* TypeProperty = new NoesisTypePropertyObjectWrapperCommand(Noesis::Symbol(TCHAR_TO_UTF8(*Function->GetName())), Noesis::TypeOf<NoesisFunctionWrapper>(), Function, CanExecuteFunction);
+					NoesisTypeProperty* TypeProperty = new NoesisTypePropertyObjectWrapperCommand(Noesis::Symbol((ANSICHAR*)StringCast<UTF8CHAR>(*Function->GetName()).Get()), Noesis::TypeOf<NoesisFunctionWrapper>(), Function, CanExecuteFunction);
 					TypeClass->AddProperty(TypeProperty);
 				}
 			}
@@ -2995,7 +3075,7 @@ void NoesisFillTypeClassForUClass(NoesisTypeClass* TypeClass, UClass* Class)
 		{
 			IsGetter = true;
 			SetterName[0] = TEXT('S');
-			PropertyId = Noesis::Symbol(TCHAR_TO_UTF8(*FunctionName.RightChop(3)));
+			PropertyId = Noesis::Symbol((ANSICHAR*)StringCast<UTF8CHAR>(*FunctionName.RightChop(3)).Get());
 		}
 
 		if (IsGetter)
@@ -3020,16 +3100,27 @@ void NoesisFillTypeClassForUClass(NoesisTypeClass* TypeClass, UClass* Class)
 				{
 					NoesisTypeProperty* TypeProperty = new NoesisTypePropertyObjectWrapperGetterSetter(PropertyId, OutParamType, Function, Setter);
 					TypeClass->AddProperty(TypeProperty);
+
+					if (Interface != nullptr)
+					{
+						auto& Descriptor = Interface->GetFieldNotificationDescriptor();
+						auto FieldId = Descriptor.GetField(Class, Function->GetFName());
+
+						if (FieldId.IsValid())
+						{
+							TypeClass->AddFieldNotification(FieldId, FName(PropertyId.Str()));
+						}
 					}
 				}
 			}
 		}
+	}
 
 	for (TFieldIterator<FProperty> PropertyIt(Class, EFieldIteratorFlags::ExcludeSuper); PropertyIt; ++PropertyIt)
 	{
 		FProperty* Property = *PropertyIt;
 		FString PropertyName = Property->GetName();
-		Noesis::Symbol PropertyId = Noesis::Symbol(TCHAR_TO_UTF8(*PropertyName));
+		Noesis::Symbol PropertyId = Noesis::Symbol((ANSICHAR*)StringCast<UTF8CHAR>(*PropertyName).Get());
 
 		if (TypeClass->FindProperty(PropertyId) == nullptr)
 		{
@@ -3038,6 +3129,28 @@ void NoesisFillTypeClassForUClass(NoesisTypeClass* TypeClass, UClass* Class)
 			{
 				NoesisTypeProperty* TypeProperty = new NoesisTypePropertyObjectWrapper(PropertyId, PropertyType, Property);
 				TypeClass->AddProperty(TypeProperty);
+
+				if (Interface != nullptr)
+				{
+					auto& Descriptor = Interface->GetFieldNotificationDescriptor();
+					auto FieldId = Descriptor.GetField(Class, Property->GetFName());
+
+					if (FieldId.IsValid())
+					{
+						if (Property->IsA<FArrayProperty>())
+						{
+							TypeClass->AddArrayFieldNotification(FieldId, FName(PropertyId.Str()));
+						}
+						else if (Property->IsA<FMapProperty>())
+						{
+							TypeClass->AddMapFieldNotification(FieldId, FName(PropertyId.Str()));
+						}
+						else
+						{
+							TypeClass->AddFieldNotification(FieldId, FName(PropertyId.Str()));
+						}
+					}
+				}
 			}
 		}
 
@@ -3063,7 +3176,7 @@ Noesis::TypeClass* NoesisCreateTypeClassForUClass(UClass* Class)
 	}
 
 	FString RegisterClassName = RegisterNameFromPath(Class->GetPathName());
-	NoesisTypeClass* TypeClass = new NoesisTypeClass(Noesis::Symbol(TCHAR_TO_UTF8(*RegisterClassName)));
+	NoesisTypeClass* TypeClass = new NoesisTypeClass(Noesis::Symbol((ANSICHAR*)StringCast<UTF8CHAR>(*RegisterClassName).Get()));
 
 	NoesisFillTypeClassForUClass(TypeClass, Class);
 
@@ -3073,7 +3186,7 @@ Noesis::TypeClass* NoesisCreateTypeClassForUClass(UClass* Class)
 
 Noesis::BaseComponent* CallbackCreateMaterialWrapper(Noesis::Symbol Name)
 {
-	FString UnrealTypeName = UTF8_TO_TCHAR(Name.Str());
+	FString UnrealTypeName = StringCast<TCHAR>((UTF8CHAR*)Name.Str()).Get();
 	FString GamePath = PathFromRegisterName_GameAsset(UnrealTypeName);
 	UMaterialInterface* Material = LoadObject<UMaterialInterface>(nullptr, *GamePath, nullptr, LOAD_NoWarn);
 	if (Material == nullptr)
@@ -3110,7 +3223,7 @@ Noesis::TypeClass* NoesisCreateTypeClassForUMaterial(UMaterialInterface* Materia
 	}
 
 	FString RegisterClassName = RegisterNameFromPath(Material->GetPathName());
-	NoesisTypeClass* TypeClass = new NoesisTypeClass(Noesis::Symbol(TCHAR_TO_UTF8(*RegisterClassName)));
+	NoesisTypeClass* TypeClass = new NoesisTypeClass(Noesis::Symbol((ANSICHAR*)StringCast<UTF8CHAR>(*RegisterClassName).Get()));
 
 	TypeClass->Material = Material;
 
@@ -3134,7 +3247,7 @@ Noesis::TypeClass* NoesisCreateTypeClassForUMaterial(UMaterialInterface* Materia
 
 			if (BaseMaterial->MaterialDomain == MD_UI)
 			{
-				Data->RegisterProperty<float>(DependencyProperty, TCHAR_TO_UTF8(*Param.Name.ToString()),
+				Data->RegisterProperty<float>(DependencyProperty, (ANSICHAR*)StringCast<UTF8CHAR>(*Param.Name.ToString()).Get(),
 					Noesis::FrameworkPropertyMetadata::Create(Value,
 						Noesis::FrameworkPropertyMetadataOptions_None, Noesis::PropertyChangedCallback(
 							[ParamName = Param.Name](Noesis::DependencyObject* Object, const Noesis::DependencyPropertyChangedEventArgs& Args)
@@ -3145,7 +3258,7 @@ Noesis::TypeClass* NoesisCreateTypeClassForUMaterial(UMaterialInterface* Materia
 			}
 			else
 			{
-				Data->RegisterProperty<float>(DependencyProperty, TCHAR_TO_UTF8(*Param.Name.ToString()),
+				Data->RegisterProperty<float>(DependencyProperty, (ANSICHAR*)StringCast<UTF8CHAR>(*Param.Name.ToString()).Get(),
 					Noesis::FrameworkPropertyMetadata::Create(Value,
 						Noesis::FrameworkPropertyMetadataOptions_None, Noesis::PropertyChangedCallback(
 							[ParamName = Param.Name](Noesis::DependencyObject* Object, const Noesis::DependencyPropertyChangedEventArgs& Args)
@@ -3172,7 +3285,7 @@ Noesis::TypeClass* NoesisCreateTypeClassForUMaterial(UMaterialInterface* Materia
 
 			if (BaseMaterial->MaterialDomain == MD_UI)
 			{
-				Data->RegisterProperty<Noesis::Color>(DependencyProperty, TCHAR_TO_UTF8(*Param.Name.ToString()),
+				Data->RegisterProperty<Noesis::Color>(DependencyProperty, (ANSICHAR*)StringCast<UTF8CHAR>(*Param.Name.ToString()).Get(),
 					Noesis::FrameworkPropertyMetadata::Create(Noesis::Color(Value.R, Value.G, Value.B, Value.A),
 						Noesis::FrameworkPropertyMetadataOptions_None, Noesis::PropertyChangedCallback(
 							[ParamName = Param.Name](Noesis::DependencyObject* Object, const Noesis::DependencyPropertyChangedEventArgs& Args)
@@ -3182,19 +3295,19 @@ Noesis::TypeClass* NoesisCreateTypeClassForUMaterial(UMaterialInterface* Materia
 								Wrapper->SetVectorParameterValue(ParamName, FLinearColor(Color.r, Color.g, Color.b, Color.a));
 							})));
 
-				Data->RegisterProperty<Noesis::Point4D>(LinearDependencyProperty, TCHAR_TO_UTF8(*(Param.Name.ToString() + "_Linear")),
-					Noesis::FrameworkPropertyMetadata::Create(Noesis::Point4D(Value.R, Value.G, Value.B, Value.A),
+				Data->RegisterProperty<Noesis::Color>(LinearDependencyProperty, (ANSICHAR*)StringCast<UTF8CHAR>(*(Param.Name.ToString() + "_Linear")).Get(),
+					Noesis::FrameworkPropertyMetadata::Create(NoesisTypeTraits<FLinearColor>::ToNoesis(Value),
 						Noesis::FrameworkPropertyMetadataOptions_None, Noesis::PropertyChangedCallback(
 							[ParamName = Param.Name](Noesis::DependencyObject* Object, const Noesis::DependencyPropertyChangedEventArgs& Args)
 							{
 								NoesisUIMaterialWrapper* Wrapper = (NoesisUIMaterialWrapper*)Object;
-								Noesis::Point4D Color = Args.NewValue<Noesis::Point4D>();
-								Wrapper->SetVectorParameterValue(ParamName, FLinearColor(Color.y, Color.z, Color.w, Color.x));
+								Noesis::Color Color = Args.NewValue<Noesis::Color>();
+								Wrapper->SetVectorParameterValue(ParamName, NoesisTypeTraits<FLinearColor>::ToUnreal(Color));
 							})));
 			}
 			else
 			{
-				Data->RegisterProperty<Noesis::Color>(DependencyProperty, TCHAR_TO_UTF8(*Param.Name.ToString()),
+				Data->RegisterProperty<Noesis::Color>(DependencyProperty, (ANSICHAR*)StringCast<UTF8CHAR>(*Param.Name.ToString()).Get(),
 					Noesis::FrameworkPropertyMetadata::Create(Noesis::Color(Value.R, Value.G, Value.B, Value.A),
 						Noesis::FrameworkPropertyMetadataOptions_None, Noesis::PropertyChangedCallback(
 							[ParamName = Param.Name](Noesis::DependencyObject* Object, const Noesis::DependencyPropertyChangedEventArgs& Args)
@@ -3204,14 +3317,14 @@ Noesis::TypeClass* NoesisCreateTypeClassForUMaterial(UMaterialInterface* Materia
 								Wrapper->SetVectorParameterValue(ParamName, FLinearColor(Color.r, Color.g, Color.b, Color.a));
 							})));
 
-				Data->RegisterProperty<Noesis::Point4D>(LinearDependencyProperty, TCHAR_TO_UTF8(*(Param.Name.ToString() + "_Linear")),
-					Noesis::FrameworkPropertyMetadata::Create(Noesis::Point4D(Value.R, Value.G, Value.B, Value.A),
+				Data->RegisterProperty<Noesis::Color>(LinearDependencyProperty, (ANSICHAR*)StringCast<UTF8CHAR>(*(Param.Name.ToString() + "_Linear")).Get(),
+					Noesis::FrameworkPropertyMetadata::Create(NoesisTypeTraits<FLinearColor>::ToNoesis(Value),
 						Noesis::FrameworkPropertyMetadataOptions_None, Noesis::PropertyChangedCallback(
 							[ParamName = Param.Name](Noesis::DependencyObject* Object, const Noesis::DependencyPropertyChangedEventArgs& Args)
 							{
 								NoesisPostProcessMaterialWrapper* Wrapper = (NoesisPostProcessMaterialWrapper*)Object;
-								Noesis::Point4D Color = Args.NewValue<Noesis::Point4D>();
-								Wrapper->SetVectorParameterValue(ParamName, FLinearColor(Color.y, Color.z, Color.w, Color.x));
+								Noesis::Color Color = Args.NewValue<Noesis::Color>();
+								Wrapper->SetVectorParameterValue(ParamName, NoesisTypeTraits<FLinearColor>::ToUnreal(Color));
 							})));
 			}
 		}
@@ -3231,7 +3344,7 @@ Noesis::TypeClass* NoesisCreateTypeClassForUMaterial(UMaterialInterface* Materia
 
 			if (BaseMaterial->MaterialDomain == MD_UI)
 			{
-				Data->RegisterProperty<Noesis::Ptr<Noesis::BitmapSource>>(DependencyProperty, TCHAR_TO_UTF8(*Param.Name.ToString()),
+				Data->RegisterProperty<Noesis::Ptr<Noesis::BitmapSource>>(DependencyProperty, (ANSICHAR*)StringCast<UTF8CHAR>(*Param.Name.ToString()).Get(),
 					Noesis::FrameworkPropertyMetadata::Create(Noesis::StaticPtrCast<Noesis::BitmapSource>(NoesisCreateComponentForUObject(Value)),
 						Noesis::FrameworkPropertyMetadataOptions_None, Noesis::PropertyChangedCallback(
 							[ParamName = Param.Name](Noesis::DependencyObject* Object, const Noesis::DependencyPropertyChangedEventArgs& Args)
@@ -3256,7 +3369,7 @@ Noesis::TypeClass* NoesisCreateTypeClassForUMaterial(UMaterialInterface* Materia
 			}
 			else
 			{
-				Data->RegisterProperty<Noesis::Ptr<Noesis::BitmapSource>>(DependencyProperty, TCHAR_TO_UTF8(*Param.Name.ToString()),
+				Data->RegisterProperty<Noesis::Ptr<Noesis::BitmapSource>>(DependencyProperty, (ANSICHAR*)StringCast<UTF8CHAR>(*Param.Name.ToString()).Get(),
 					Noesis::FrameworkPropertyMetadata::Create(Noesis::StaticPtrCast<Noesis::BitmapSource>(NoesisCreateComponentForUObject(Value)),
 						Noesis::FrameworkPropertyMetadataOptions_None, Noesis::PropertyChangedCallback(
 							[ParamName = Param.Name](Noesis::DependencyObject* Object, const Noesis::DependencyPropertyChangedEventArgs& Args)
@@ -3308,7 +3421,7 @@ void NoesisFillTypeEnumForUEnum(NoesisTypeEnum* TypeEnum, UEnum* Enum)
 	for (int32 Index = 0; Index != Enum->NumEnums(); ++Index)
 	{
 		FString EnumValueName = Enum->GetAuthoredNameStringByIndex(Index);
-		TypeEnum->AddValue(Noesis::Symbol(TCHAR_TO_UTF8(*EnumValueName)), (uint64)Enum->GetValueByIndex(Index));
+		TypeEnum->AddValue(Noesis::Symbol((ANSICHAR*)StringCast<UTF8CHAR>(*EnumValueName).Get()), (uint64)Enum->GetValueByIndex(Index));
 	}
 }
 
@@ -3321,7 +3434,7 @@ Noesis::TypeEnum* NoesisCreateTypeEnumForUEnum(UEnum* Enum)
 	}
 
 	FString RegisterEnumName = RegisterNameFromPath(Enum->GetPathName());
-	Noesis::String PersistentEnumName = TCHAR_TO_UTF8(*RegisterEnumName);
+	Noesis::String PersistentEnumName = (ANSICHAR*)StringCast<UTF8CHAR>(*RegisterEnumName).Get();
 	NoesisTypeEnum* TypeEnum = new NoesisTypeEnum(Enum, Noesis::Symbol(PersistentEnumName.Str()));
 	check(TypeEnum);
 
@@ -3485,7 +3598,7 @@ void NoesisDestroyTypeClassForStruct(UUserDefinedStruct* BaseStruct)
 							if (Object->GetClass() == OwnerClass)
 							{
 								NoesisObjectWrapper* Wrapper = (NoesisObjectWrapper*)ObjectComponentPair.Value;
-								auto PropertySymbol = Noesis::Symbol(TCHAR_TO_UTF8(*Field->GetName()));
+								auto PropertySymbol = Noesis::Symbol((ANSICHAR*)StringCast<UTF8CHAR>(*Field->GetName()).Get());
 								Wrapper->NotifyPropertyChanged(PropertySymbol);
 							}
 						}
@@ -3539,7 +3652,7 @@ void NoesisDestroyTypeClassForEnum(UEnum* Enum)
 							if (Object->GetClass() == OwnerClass)
 							{
 								NoesisObjectWrapper* Wrapper = (NoesisObjectWrapper*)ObjectComponentPair.Value;
-								auto PropertySymbol = Noesis::Symbol(TCHAR_TO_UTF8(*Field->GetName()));
+								auto PropertySymbol = Noesis::Symbol((ANSICHAR*)StringCast<UTF8CHAR>(*Field->GetName()).Get());
 								Wrapper->NotifyPropertyChanged(PropertySymbol);
 							}
 						}
@@ -3576,7 +3689,7 @@ void NoesisDestroyTypeClassForEnum(UEnum* Enum)
 							if (Object->GetClass() == OwnerClass)
 							{
 								NoesisObjectWrapper* Wrapper = (NoesisObjectWrapper*)ObjectComponentPair.Value;
-								auto PropertySymbol = Noesis::Symbol(TCHAR_TO_UTF8(*Field->GetName()));
+								auto PropertySymbol = Noesis::Symbol((ANSICHAR*)StringCast<UTF8CHAR>(*Field->GetName()).Get());
 								Wrapper->NotifyPropertyChanged(PropertySymbol);
 							}
 						}
@@ -3619,7 +3732,7 @@ void NoesisAssetRenamed(UObject* Object, FString OldPath)
 				Noesis::Reflection::UnregisterNoDelete(TypeClass);
 			}
 			FString RegisterClassName = RegisterNameFromPath(Class->GetPathName());
-			TypeClass->ChangeName(Noesis::Symbol(TCHAR_TO_UTF8(*RegisterClassName)));
+			TypeClass->ChangeName(Noesis::Symbol((ANSICHAR*)StringCast<UTF8CHAR>(*RegisterClassName).Get()));
 			if (IsRegistered)
 			{
 				Noesis::Reflection::RegisterType(TypeClass);
@@ -3638,7 +3751,7 @@ void NoesisAssetRenamed(UObject* Object, FString OldPath)
 				Noesis::Reflection::UnregisterNoDelete(TypeEnum);
 			}
 			FString RegisterEnumName = RegisterNameFromPath(Enum->GetPathName());
-			TypeEnum->ChangeName(Noesis::Symbol(TCHAR_TO_UTF8(*RegisterEnumName)));
+			TypeEnum->ChangeName(Noesis::Symbol((ANSICHAR*)StringCast<UTF8CHAR>(*RegisterEnumName).Get()));
 			if (IsRegistered)
 			{
 				Noesis::Reflection::RegisterType(TypeEnum);
@@ -3657,7 +3770,7 @@ void NoesisAssetRenamed(UObject* Object, FString OldPath)
 				Noesis::Reflection::UnregisterNoDelete(TypeClass);
 			}
 			FString RegisterClassName = RegisterNameFromPath(Struct->GetPathName());
-			TypeClass->ChangeName(Noesis::Symbol(TCHAR_TO_UTF8(*RegisterClassName)));
+			TypeClass->ChangeName(Noesis::Symbol((ANSICHAR*)StringCast<UTF8CHAR>(*RegisterClassName).Get()));
 			if (IsRegistered)
 			{
 				Noesis::Reflection::RegisterType(TypeClass);
@@ -3714,7 +3827,7 @@ Noesis::TypeClass* NoesisCreateTypeClassForUStruct(UScriptStruct* Class)
 	}
 
 	FString RegisterClassName = RegisterNameFromPath(Class->GetPathName());
-	NoesisTypeClass* TypeClass = new NoesisTypeClass(Noesis::Symbol(TCHAR_TO_UTF8(*RegisterClassName)));
+	NoesisTypeClass* TypeClass = new NoesisTypeClass(Noesis::Symbol((ANSICHAR*)StringCast<UTF8CHAR>(*RegisterClassName).Get()));
 
 	NoesisFillTypeClassForUStruct(TypeClass, Class);
 
@@ -3904,7 +4017,7 @@ void NoesisNotifyPropertyChanged(UObject* Owner, FName PropertyName)
 	if (WrapperPtr)
 	{
 		NoesisObjectWrapper* Wrapper = *WrapperPtr;
-		auto PropertySymbol = Noesis::Symbol(TCHAR_TO_UTF8(*PropertyName.ToString()));
+		auto PropertySymbol = Noesis::Symbol((ANSICHAR*)StringCast<UTF8CHAR>(*PropertyName.ToString()).Get());
 #if DO_CHECK // Skip in shipping build
 		const Noesis::TypeClass* WrapperTypeClass = Wrapper->GetClassType();
 		Noesis::TypeClassProperty ClassProperty = Noesis::FindProperty(WrapperTypeClass, PropertySymbol);
@@ -3912,8 +4025,8 @@ void NoesisNotifyPropertyChanged(UObject* Owner, FName PropertyName)
 		if (TypeProperty == nullptr)
 		{
 			NS_LOG("Couldn't resolve property %s::%s",
-				TCHARToNsString(*Owner->GetClass()->GetFName().ToString()).Str(),
-				TCHARToNsString(*PropertyName.ToString()).Str());
+				(ANSICHAR*)StringCast<UTF8CHAR>(*Owner->GetClass()->GetFName().ToString()).Get(),
+				(ANSICHAR*)StringCast<UTF8CHAR>(*PropertyName.ToString()).Get());
 		}
 #endif
 		Wrapper->NotifyPropertyChanged(PropertySymbol);
@@ -3939,8 +4052,8 @@ void NoesisNotifyArrayPropertyChanged(UObject* Owner, FName ArrayPropertyName)
 	else
 	{
 		NS_LOG("Couldn't resolve Array property %s::%s",
-			TCHARToNsString(*Owner->GetClass()->GetFName().ToString()).Str(),
-			TCHARToNsString(*ArrayPropertyName.ToString()).Str());
+			(ANSICHAR*)StringCast<UTF8CHAR>(*Owner->GetClass()->GetFName().ToString()).Get(),
+			(ANSICHAR*)StringCast<UTF8CHAR>(*ArrayPropertyName.ToString()).Get());
 	}
 #endif
 }
@@ -3964,8 +4077,8 @@ void NoesisNotifyMapPropertyChanged(UObject* Owner, FName MapPropertyName)
 	else
 	{
 		NS_LOG("Couldn't resolve Map property %s::%s",
-			TCHARToNsString(*Owner->GetClass()->GetFName().ToString()).Str(),
-			TCHARToNsString(*MapPropertyName.ToString()).Str());
+			(ANSICHAR*)StringCast<UTF8CHAR>(*Owner->GetClass()->GetFName().ToString()).Get(),
+			(ANSICHAR*)StringCast<UTF8CHAR>(*MapPropertyName.ToString()).Get());
 	}
 #endif
 }
@@ -3988,8 +4101,8 @@ void NoesisNotifyCanExecuteFunctionChanged(UObject* Owner, FName FunctionName)
 	else
 	{
 		NS_LOG("Couldn't resolve function %s::%s",
-			TCHARToNsString(*Owner->GetClass()->GetFName().ToString()).Str(),
-			TCHARToNsString(*FunctionName.ToString()).Str());
+			(ANSICHAR*)StringCast<UTF8CHAR>(*Owner->GetClass()->GetFName().ToString()).Get(),
+			(ANSICHAR*)StringCast<UTF8CHAR>(*FunctionName.ToString()).Get());
 	}
 #endif
 }
@@ -4131,7 +4244,7 @@ void NoesisNotifyMapPropertyPostAdd(void* MapPointer, const FString& Key)
 	if (MapWrapperPtr)
 	{
 		NoesisMapWrapper* Map = *MapWrapperPtr;
-		Map->NotifyPostAdd(TCHAR_TO_UTF8(*Key));
+		Map->NotifyPostAdd((ANSICHAR*)StringCast<UTF8CHAR>(*Key).Get());
 	}
 }
 
@@ -4158,7 +4271,7 @@ void NoesisNotifyMapPropertyPreRemove(void* MapPointer, const FString& Key)
 	if (MapWrapperPtr)
 	{
 		NoesisMapWrapper* Map = *MapWrapperPtr;
-		Map->NotifyPreRemove(TCHAR_TO_UTF8(*Key));
+		Map->NotifyPreRemove((ANSICHAR*)StringCast<UTF8CHAR>(*Key).Get());
 	}
 }
 
@@ -4169,7 +4282,7 @@ void NoesisNotifyMapPropertyPostRemove(void* MapPointer, const FString& Key)
 	if (MapWrapperPtr)
 	{
 		NoesisMapWrapper* Map = *MapWrapperPtr;
-		Map->NotifyPostRemove(TCHAR_TO_UTF8(*Key));
+		Map->NotifyPostRemove((ANSICHAR*)StringCast<UTF8CHAR>(*Key).Get());
 	}
 }
 
@@ -4227,7 +4340,7 @@ void NoesisCultureChanged()
 					if (Property->IsA<FTextProperty>())
 					{
 						FString PropertyName = Property->GetName();
-						Noesis::Symbol PropertyId = Noesis::Symbol(TCHAR_TO_UTF8(*PropertyName));
+						Noesis::Symbol PropertyId = Noesis::Symbol((ANSICHAR*)StringCast<UTF8CHAR>(*PropertyName).Get());
 
 						Wrapper->NotifyPropertyChanged(PropertyId);
 					}
@@ -4236,14 +4349,15 @@ void NoesisCultureChanged()
 				for (TFieldIterator<UFunction> FunctionIt(Class, EFieldIteratorFlags::IncludeSuper); FunctionIt; ++FunctionIt)
 				{
 					UFunction* Function = *FunctionIt;
-					if (Function->GetName().StartsWith(TEXT("Get")) && Function->NumParms == 1 && Function->HasAnyFunctionFlags(FUNC_HasOutParms))
+					if (Function->GetName().StartsWith(TEXT("Get")) && Function->NumParms == 1 &&
+						(Function->HasAnyFunctionFlags(FUNC_HasOutParms) || Function->GetReturnProperty() != nullptr))
 					{
 						FProperty* OutParam = CastField<FProperty>(Function->ChildProperties);
 
 						if (OutParam->IsA<FTextProperty>())
 						{
 							FString PropertyName = Function->GetName().RightChop(3);
-							Noesis::Symbol PropertyId = Noesis::Symbol(TCHAR_TO_UTF8(*PropertyName));
+							Noesis::Symbol PropertyId = Noesis::Symbol((ANSICHAR*)StringCast<UTF8CHAR>(*PropertyName).Get());
 
 							Wrapper->NotifyPropertyChanged(PropertyId);
 						}
@@ -4328,7 +4442,7 @@ void NoesisReflectionRegistryCallback(Noesis::Symbol Name)
 		return;
 
 	// Make sure the name doesn't have invalid charaters to avoid errors in LoadObject
-	FString UnrealTypeName = UTF8_TO_TCHAR(Name.Str());
+	FString UnrealTypeName = StringCast<TCHAR>((UTF8CHAR*)Name.Str()).Get();
 	if (UnrealTypeName.Contains(TEXT("<")))
 		return;
 

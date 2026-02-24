@@ -113,6 +113,10 @@ class NOESISRUNTIME_API UNoesisSettings : public UObject
 	UPROPERTY(EditAnywhere, Config, Category = "Rendering", meta = (ConfigRestartRequired = true, ClampMin = 0, UIMin = 0))
 	int32 OffscreenTextureHeight;
 
+	/** Turning this setting on helps with TSR/TAA when rendering WorldUI */
+	UPROPERTY(EditAnywhere, Config, Category = "WorldUI", meta = (ConfigRestartRequired = true))
+	bool UpdateVelocities = true;
+
 	/** Sets the logging level for general messages */
 	UPROPERTY(EditAnywhere, Config, Category = "Editor Settings")
 	ENoesisLoggingSettings GeneralLogLevel;

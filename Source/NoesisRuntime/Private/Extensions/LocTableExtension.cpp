@@ -6,6 +6,13 @@
 #include "Extensions/LocTableExtension.h"
 #include "NsGui/ContentPropertyMetaData.h"
 
+// CoreUObject includes
+#include "Misc/PackageName.h"
+
+// Core includes
+#include "Internationalization/StringTableRegistry.h"
+#include "Internationalization/StringTableCore.h"
+
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 static void DynamicConvert(const Noesis::Type* targetType, Noesis::Ptr<Noesis::BaseComponent>& sourceVal)
 {
@@ -59,9 +66,9 @@ public:
     {
         FString DisplayString = mExtension->GetDisplayString(mTargetObject);
 
-        Noesis::String(TCHAR_TO_UTF8(*DisplayString));
+        Noesis::String((ANSICHAR*)StringCast<UTF8CHAR>(*DisplayString).Get());
 
-        Noesis::Ptr<Noesis::BaseComponent> sourceVal = Noesis::Boxing::Box(TCHAR_TO_UTF8(*DisplayString));
+        Noesis::Ptr<Noesis::BaseComponent> sourceVal = Noesis::Boxing::Box((ANSICHAR*)StringCast<UTF8CHAR>(*DisplayString).Get());
 
         Noesis::Ptr<BaseComponent> convertedVal;
         if (mConverter && mConverter->TryConvert(sourceVal, mTargetProperty->GetType(),
@@ -180,7 +187,34 @@ FString LocTableExtension::GetDisplayString(Noesis::DependencyObject* object)
     {
         id = object->GetValue<Noesis::String>(IdProperty).Str();
     }
-    return FText::FromStringTable(UTF8_TO_TCHAR(id), UTF8_TO_TCHAR(GetKey()), EStringTableLoadingPolicy::FindOrLoad).ToString();
+
+    FString idStr = StringCast<TCHAR>((UTF8CHAR*)id).Get();
+    FString PackageRoot, PackagePath, PackageName;
+    FPackageName::SplitLongPackageName(idStr, PackageRoot, PackagePath, PackageName, false);
+    if (FPackageName::IsValidTextForLongPackageName(idStr))
+    {
+        PackageName += TEXT(".") + PackageName;
+    }
+
+    FName TableId(PackageRoot + PackagePath + PackageName);
+    // We don't seem to need to call IStringTableEngineBridge::FullyLoadStringTableAsset(TableId);
+    auto TablePtr = FStringTableRegistry::Get().FindStringTable(TableId);
+    if (TablePtr && TablePtr->IsLoaded())
+    {
+        if (auto EntryPtr = TablePtr->FindEntry(StringCast<TCHAR>((UTF8CHAR*)GetKey()).Get()))
+        {
+            if (auto DisplayStringPtr = EntryPtr->GetDisplayString())
+            {
+                return *DisplayStringPtr.Get();
+            }
+            else
+            {
+                return EntryPtr->GetSourceString();
+            }
+        }
+    }
+
+    return StringCast<TCHAR>(GetSource()).Get();
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////

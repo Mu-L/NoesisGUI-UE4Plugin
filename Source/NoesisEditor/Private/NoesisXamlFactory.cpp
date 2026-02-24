@@ -93,7 +93,7 @@ TArray<UFontFace*> ImportFontFamily(FString PackagePath, FString FamilyName, FSt
 						Noesis::MemoryStream Stream(FileData.GetData(), FileData.Num());
 						Noesis::Fonts::GetTypefaces(&Stream, [&](const Noesis::Typeface& typeface)
 						{
-							if (Noesis::StrCaseStartsWith(TCHAR_TO_UTF8(*FamilyName), typeface.familyName))
+							if (Noesis::StrCaseStartsWith((ANSICHAR*)StringCast<UTF8CHAR>(*FamilyName).Get(), typeface.familyName))
 							{
 								FString FontFaceName = ObjectTools::SanitizeObjectName(FPaths::GetBaseFilename(FPaths::GetBaseFilename(FilenameOrDirectory)));
 
@@ -187,7 +187,7 @@ class LocTextExtensionEditor : public LocTextExtension
 				node = node->GetNodeParent();
 			}
 		}
-		return FText::ChangeKey(UTF8_TO_TCHAR(ns), UTF8_TO_TCHAR(GetKey()), FText::FromString(UTF8_TO_TCHAR(GetSource())));
+		return FText::ChangeKey(StringCast<TCHAR>((UTF8CHAR*)ns).Get(), StringCast<TCHAR>((UTF8CHAR*)GetKey()).Get(), FText::FromString(StringCast<TCHAR>((UTF8CHAR*)GetSource()).Get()));
 	}
 
 	/// From MarkupExtension
@@ -229,7 +229,7 @@ class LocTableExtensionEditor : public LocTableExtension
 			}
 		}
 
-		return FText::FromStringTable(UTF8_TO_TCHAR(id), UTF8_TO_TCHAR(GetKey()), EStringTableLoadingPolicy::FindOrLoad);
+		return FText::FromStringTable(StringCast<TCHAR>((UTF8CHAR*)id).Get(), StringCast<TCHAR>((UTF8CHAR*)GetKey()).Get(), EStringTableLoadingPolicy::FindOrLoad);
 	}
 
 	/// From MarkupExtension
@@ -388,8 +388,8 @@ UObject* UNoesisXamlFactory::FactoryCreateBinary(UClass* Class, UObject* Parent,
 
 		NoesisXaml = NewObject<UNoesisXaml>(Parent, Class, Name, Flags);
 
-		FString XamlText = UTF8_TO_TCHAR((const char*)Buffer);
-		Noesis::String Text = TCHAR_TO_UTF8(*XamlText);
+		FString XamlText = StringCast<TCHAR>((UTF8CHAR*)(const char*)Buffer).Get();
+		Noesis::String Text = (ANSICHAR*)StringCast<UTF8CHAR>(*XamlText).Get();
 		Noesis::MemoryStream XamlStream(Text.Str(), Text.Size());
 
 		INoesisRuntimeModuleInterface& NoesisRuntime = INoesisRuntimeModuleInterface::Get();
@@ -545,7 +545,7 @@ UObject* UNoesisXamlFactory::FactoryCreateBinary(UClass* Class, UObject* Parent,
 			return (*Callback)(Uri, Type);
 		};
 		FString Uri = PackageRoot.LeftChop(1) + TEXT(";component/") + PackagePath + PackageName + TEXT(".xaml");
-		Noesis::GUI::GetXamlDependencies(&XamlStream, TCHAR_TO_UTF8(*Uri), &DependencyCallback, DependencyCallbackAdaptor);
+		Noesis::GUI::GetXamlDependencies(&XamlStream, (ANSICHAR*)StringCast<UTF8CHAR>(*Uri).Get(), &DependencyCallback, DependencyCallbackAdaptor);
 
 		NoesisXaml->XamlText.Insert((uint8*)Text.Str(), Text.Size(), 0);
 
@@ -567,6 +567,9 @@ UObject* UNoesisXamlFactory::FactoryCreateBinary(UClass* Class, UObject* Parent,
 	// Make sure textures have alpha premultiplied if the user needs them, or are cleaned if they already are
 	for (auto Texture : NoesisXaml->Textures)
 	{
+		if (Texture == nullptr)
+			continue;
+
 		if (Texture->LODGroup != TEXTUREGROUP_UI ||
 			Texture->SRGB)
 		{

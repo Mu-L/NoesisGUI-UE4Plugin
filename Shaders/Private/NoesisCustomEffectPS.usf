@@ -149,5 +149,12 @@ Out NoesisPS(in In i)
         o.color.rgb = ApplyGammaCorrection(o.color.rgb, gammaAndAlphaValues.x);
     #endif
 
+    #if ALPHA_MASK
+        if (o.color.a == 0.0)
+            discard;
+ 
+        o.color = half4(0.0, 0.0, 0.0, 0.0);
+    #endif
+
     return o;
 }

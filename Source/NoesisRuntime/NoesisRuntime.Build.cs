@@ -42,9 +42,10 @@ public class NoesisRuntime : ModuleRules
 
 		PrivateIncludePaths.AddRange(
 			new string[] {
-				"NoesisRuntime/Private",
+				System.IO.Path.Combine(ModuleDirectory, "Private"),
 				System.IO.Path.Combine(GetModuleDirectory("Renderer"), "Private"),
 				System.IO.Path.Combine(GetModuleDirectory("Renderer"), "Internal"),
+				System.IO.Path.Combine(GetModuleDirectory("Core"), "Private"),
 			}
 			);
 
@@ -68,7 +69,8 @@ public class NoesisRuntime : ModuleRules
 				"UElibPNG",
 				"Renderer",
 				"NetCore",
-				"Noesis"
+				"Noesis",
+				"FieldNotification"
 			}
 			);
 

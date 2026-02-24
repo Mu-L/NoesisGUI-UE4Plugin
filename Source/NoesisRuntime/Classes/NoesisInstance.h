@@ -141,10 +141,10 @@ class NOESISRUNTIME_API UNoesisInstance : public UUserWidget
 	FNoesisSlateElementPtr NoesisSlateElement;
 
 	UPROPERTY()
-	class UWidgetComponent* WidgetComponent;
+	TObjectPtr<class UWidgetComponent> WidgetComponent;
 
 	UPROPERTY()
-	class UNoesisXaml* BaseXaml;
+	TObjectPtr<class UNoesisXaml> BaseXaml;
 
 	UPROPERTY(BlueprintReadWrite, Category = "NoesisGUI")
 	bool EnablePPAA;

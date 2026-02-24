@@ -52,8 +52,6 @@ NoesisMediaPlayer::NoesisMediaPlayer(NoesisApp::MediaElement* Owner, const Noesi
 	MediaPlayer->AddToRoot();
 
 	MediaTexture = NewObject<UMediaTexture>(GetTransientPackage(), NAME_None, RF_Transient | RF_Public);
-	// Read the comment next to PATTERN_SRGB in FNoesisPS::ModifyCompilationEnvironment
-	// MediaTexture->SRGB = false;
 	MediaTexture->AutoClear = true;
 	MediaTexture->SetMediaPlayer(MediaPlayer);
 	MediaTexture->UpdateResource();
@@ -81,7 +79,7 @@ NoesisMediaPlayer::NoesisMediaPlayer(NoesisApp::MediaElement* Owner, const Noesi
 		View = Owner->GetView();
 		View->Rendering() += Noesis::MakeDelegate(this, &NoesisMediaPlayer::OnRendering);
 	}
-	else if (MediaPlayer->OpenFile(UTF8_TO_TCHAR(Uri.Str())))
+	else if (MediaPlayer->OpenFile(StringCast<TCHAR>((UTF8CHAR*)Uri.Str()).Get()))
 	{
 		MediaPlayer->OnMediaEvent().AddRaw(this, &NoesisMediaPlayer::OnMediaEvent);
 
@@ -90,7 +88,7 @@ NoesisMediaPlayer::NoesisMediaPlayer(NoesisApp::MediaElement* Owner, const Noesi
 	}
 	else
 	{
-		NS_LOG("Failed to open MediaSource '%s'. Copy video files into 'Content/Movies' in your Unreal project", TCHAR_TO_UTF8(*VideoPath));
+		NS_LOG("Failed to open MediaSource '%s'. Copy video files into 'Content/Movies' in your Unreal project", (ANSICHAR*)StringCast<UTF8CHAR>(*VideoPath).Get());
 	}
 }
 

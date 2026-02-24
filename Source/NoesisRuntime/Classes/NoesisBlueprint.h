@@ -37,7 +37,7 @@ public:
 
 	/** Xaml file that defines the user interface. */
 	UPROPERTY(EditAnywhere, Category = "Noesis View", meta = (DisplayName = "XAML"))
-	class UNoesisXaml* BaseXaml;
+	TObjectPtr<class UNoesisXaml> BaseXaml;
 
 	/** Per-Primitive Antialiasing extrudes the contours of the geometry and smooths them. Useful when GPU MSAA is not enabled. */
 	UPROPERTY(EditAnywhere, Category = "Noesis View")

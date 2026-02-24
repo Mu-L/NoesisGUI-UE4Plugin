@@ -17,17 +17,17 @@
 
 inline FString NsStringToFString(const char* String)
 {
-	return FString(UTF8_TO_TCHAR(String));
+	return FString(StringCast<TCHAR>((UTF8CHAR*)String).Get());
 }
 
 inline FName NsStringToFName(const char* String)
 {
-	return FName(UTF8_TO_TCHAR(String));
+	return FName(StringCast<TCHAR>((UTF8CHAR*)String).Get());
 }
 
 inline Noesis::String TCHARToNsString(const TCHAR* String)
 {
-	return Noesis::String(TCHAR_TO_UTF8(String));
+	return Noesis::String((ANSICHAR*)StringCast<UTF8CHAR>(String).Get());
 }
 
 inline FMatrix NsMatrixToFMatrix(const Noesis::Matrix4& Matrix)
@@ -79,7 +79,7 @@ inline FString NsProviderUriToAssetPath(const Noesis::Uri& Uri)
 
 inline Noesis::String GetAssetAssembly(const FString& Root)
 {
-	return Root == "NoesisGUI" ? "Noesis.GUI.Extensions" : TCHAR_TO_UTF8(*Root);
+	return Root == "NoesisGUI" ? "Noesis.GUI.Extensions" : (ANSICHAR*)StringCast<UTF8CHAR>(*Root).Get();
 }
 
 inline Noesis::Uri NsAssetPathToProviderUri(const FString& AssetPath, const FString& Extension)
@@ -88,7 +88,7 @@ inline Noesis::Uri NsAssetPathToProviderUri(const FString& AssetPath, const FStr
 	FPackageName::SplitLongPackageName(AssetPath, PackageRoot, PackagePath, PackageName, false);
 	FString Package = FPaths::GetBaseFilename(PackageName);
 	auto Assembly = GetAssetAssembly(PackageRoot.LeftChop(1).RightChop(1));
-	auto Uri = Noesis::Uri::Pack(Assembly.Str(), TCHAR_TO_UTF8(*(PackagePath + Package + Extension)));
+	auto Uri = Noesis::Uri::Pack(Assembly.Str(), (ANSICHAR*)StringCast<UTF8CHAR>(*(PackagePath + Package + Extension)).Get());
 	return Uri;	
 }
 

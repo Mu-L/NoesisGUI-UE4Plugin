@@ -90,7 +90,7 @@ void NoesisCultureChanged();
 void NoesisReflectionRegistryCallback(Noesis::Symbol TypeId);
 
 
-#if UE_BUILD_SHIPPING + UE_BUILD_SHIPPING_WITH_EDITOR == 0
+#if NO_LOGGING == 0
 static void NoesisLogHandler(const char* File, uint32_t Line, uint32_t Level, const char* Channel, const char* Message)
 {
 	if (UObjectInitialized())
@@ -114,11 +114,11 @@ static void NoesisLogHandler(const char* File, uint32_t Line, uint32_t Level, co
 		{
 			switch (Level)
 			{
-				case 0: UE_LOG(LogNoesis, VeryVerbose, TEXT("%s"), *NsStringToFString(Message)); break;
-				case 1: UE_LOG(LogNoesis, Verbose, TEXT("%s"), *NsStringToFString(Message)); break;
-				case 2: UE_LOG(LogNoesis, Log, TEXT("%s"), *NsStringToFString(Message)); break;
-				case 3: UE_LOG(LogNoesis, Warning, TEXT("%s"), *NsStringToFString(Message)); break;
-				case 4: UE_LOG(LogNoesis, Error, TEXT("%s"), *NsStringToFString(Message)); break;
+				case 0: UE_LOG(LogNoesisEngine, VeryVerbose, TEXT("%s"), StringCast<TCHAR>((UTF8CHAR*)Message).Get()); break;
+				case 1: UE_LOG(LogNoesisEngine, Verbose, TEXT("%s"), StringCast<TCHAR>((UTF8CHAR*)Message).Get()); break;
+				case 2: UE_LOG(LogNoesisEngine, Log, TEXT("%s"), StringCast<TCHAR>((UTF8CHAR*)Message).Get()); break;
+				case 3: UE_LOG(LogNoesisEngine, Warning, TEXT("%s"), StringCast<TCHAR>((UTF8CHAR*)Message).Get()); break;
+				case 4: UE_LOG(LogNoesisEngine, Error, TEXT("%s"), StringCast<TCHAR>((UTF8CHAR*)Message).Get()); break;
 			}
 		}
 	}
@@ -154,16 +154,97 @@ static void NoesisErrorHandler(const char* Filename, uint32 Line, const char* De
 #if UE_VERSION_OLDER_THAN(5, 0, 0)
 		LowLevelFatalErrorHandler(Filename, Line, TEXT("%s"), *NsStringToFString(Desc));
 #elif UE_VERSION_OLDER_THAN(5, 4, 0)
-		LowLevelFatalErrorHandler(Filename, (int32)Line, PLATFORM_RETURN_ADDRESS(), TEXT("%s"), *NsStringToFString(Desc));
+		LowLevelFatalErrorHandler(Filename, (int32)Line, PLATFORM_RETURN_ADDRESS(), TEXT("%s"), StringCast<TCHAR>((UTF8CHAR*)Desc).Get());
+#elif UE_VERSION_OLDER_THAN(5, 7, 0)
+		LowLevelFatalErrorHandler(Filename, (int32)Line, TEXT("%s"), StringCast<TCHAR>((UTF8CHAR*)Desc).Get());
 #else
-		LowLevelFatalErrorHandler(Filename, (int32)Line, TEXT("%s"), *NsStringToFString(Desc));
+		LowLevelFatalError(TEXT("%s"), StringCast<TCHAR>((UTF8CHAR*)Desc).Get());
 #endif
 	}
 
-	NS_LOG("%s", Desc);
+	NS_LOG("%s", (UTF8CHAR*)Desc);
 }
 
 DECLARE_MEMORY_STAT(TEXT("CPU Memory"), STAT_NoesisMemory, STATGROUP_Noesis);
+
+#define NOESIS_USE_STOMP_ALLOCATOR 0
+
+#if NOESIS_USE_STOMP_ALLOCATOR
+#include "HAL/IConsoleManager.h"
+#include "HAL/MallocStomp.h"
+#if !IS_MONOLITHIC
+// What's all this about?
+// MallocStomp.OverrunTest is registered in the Core module
+// and then the ConsoleCommand object is destroyed by calling Release
+// when we include MallocStomp.cpp below and re-register it.
+// So what this does is it replaces the vtable of the original
+// object with one that implements an empty Release, so that the
+// memory is not freed and we don't get a crash at shutdown
+// when the object is auto released.
+// This needs to be done before MallocStomp.cpp re-registers
+// the command, hence the variable NoesisUnregisterStompAllocConsoleObject.
+class FNoReleaseConsoleObject : public IConsoleCommand
+{
+	virtual const TCHAR* GetHelp() const { return TEXT(""); }
+	virtual void SetHelp(const TCHAR* Value) {}
+	virtual EConsoleVariableFlags GetFlags() const { return EConsoleVariableFlags::ECVF_Unregistered; }
+	virtual void SetFlags(const EConsoleVariableFlags Value) {}
+	virtual void Release() {}
+	virtual struct IConsoleCommand* AsCommand() { return this; }
+	virtual bool Execute(const TArray< FString >& Args, UWorld* InWorld, class FOutputDevice& OutputDevice) { return false; }
+};
+static struct NoesisUnregisterStompAllocConsoleObject
+{
+	NoesisUnregisterStompAllocConsoleObject()
+	{
+		auto CVar = IConsoleManager::Get().FindConsoleObject(TEXT("MallocStomp.OverrunTest"));
+		new(CVar) FNoReleaseConsoleObject();
+	}
+} NoesisUnregisterStompAllocConsoleObject;
+extern FAutoConsoleCommand MallocStompTestCommand;
+#include "HAL/MallocStomp.cpp"
+#endif // !IS_MONOLITHIC
+
+void* NoesisAlloc(void* UserData, size_t Size)
+{
+	auto Allocator = (FMallocStomp*)UserData;
+	void* Result = Allocator->Malloc(Size, 8);
+	SET_MEMORY_STAT(STAT_NoesisMemory, Noesis::GetAllocatedMemory());
+	return Result;
+}
+
+void* NoesisRealloc(void* UserData, void* Ptr, size_t Size)
+{
+	auto Allocator = (FMallocStomp*)UserData;
+	void* Result = Allocator->Realloc(Ptr, Size, 8);
+	SET_MEMORY_STAT(STAT_NoesisMemory, Noesis::GetAllocatedMemory());
+	return Result;
+}
+
+void NoesisDealloc(void* UserData, void* Ptr)
+{
+	auto Allocator = (FMallocStomp*)UserData;
+	Allocator->Free(Ptr);
+
+#if STATS
+	// Avoid collecting stats if the system has already been shut down.
+	if (FThreadStats::WillEverCollectData())
+	{
+		SET_MEMORY_STAT(STAT_NoesisMemory, Noesis::GetAllocatedMemory());
+	}
+#endif
+}
+
+size_t NoesisAllocSize(void* UserData, void* Ptr)
+{
+	auto Allocator = (FMallocStomp*)UserData;
+	size_t AllocationSize = 0;
+	Allocator->GetAllocationSize(Ptr, AllocationSize);
+	return AllocationSize;
+}
+
+#else
+
 void* NoesisAlloc(void* UserData, size_t Size)
 {
 	void* Result = FMemory::Malloc(Size);
@@ -195,6 +276,8 @@ size_t NoesisAllocSize(void* UserData, void* Ptr)
 {
 	return FMemory::GetAllocSize(Ptr);
 }
+
+#endif
 
 #if WITH_EDITOR
 class NotifyEnumChanged : public FEnumEditorUtils::INotifyOnEnumChanged
@@ -272,7 +355,7 @@ public:
 			int32 Length = CurrentText.Len();
 			FString NewString = InNewText.ToString();
 			FString NewText = CurrentText.Left(BeginIndex) + NewString + CurrentText.RightChop(BeginIndex + Length);
-			TextBox->SetText(TCHARToNsString(*NewText).Str());
+			TextBox->SetText((ANSICHAR*)StringCast<UTF8CHAR>(*NewText).Get());
 			int32 NewLength = NewString.Len();
 			TextBox->SetSelectionStart(BeginIndex);
 			TextBox->SetSelectionLength(NewLength);
@@ -283,7 +366,7 @@ public:
 			int32 Length = CurrentText.Len();
 			FString NewString = InNewText.ToString();
 			FString NewText = CurrentText.Left(BeginIndex) + NewString + CurrentText.RightChop(BeginIndex + Length);
-			TextBox->SetText(TCHARToNsString(*NewText).Str());
+			TextBox->SetText((ANSICHAR*)StringCast<UTF8CHAR>(*NewText).Get());
 			int32 NewLength = NewString.Len();
 			TextBox->SetSelectionStart(BeginIndex);
 			TextBox->SetSelectionLength(NewLength);
@@ -380,7 +463,7 @@ public:
 	virtual void SetTextFromVirtualKeyboard(const FText& InNewText, ETextEntryType TextEntryType) override
 	{
 		FString NewString = InNewText.ToString();
-		PasswordBox->SetPassword(TCHARToNsString(*NewString).Str());
+		PasswordBox->SetPassword((ANSICHAR*)StringCast<UTF8CHAR>(*NewString).Get());
 
 		if (LastSelectedPasswordBox != PasswordBox)
 		{
@@ -620,7 +703,11 @@ public:
 	{
 		NoesisRuntimeModuleInterface = this;
 
-		Noesis::MemoryCallbacks MemoryCallbacks { 0, &NoesisAlloc, &NoesisRealloc, &NoesisDealloc, &NoesisAllocSize };
+#if NOESIS_USE_STOMP_ALLOCATOR
+		Noesis::MemoryCallbacks MemoryCallbacks { new FMallocStomp(), &NoesisAlloc, &NoesisRealloc, &NoesisDealloc, &NoesisAllocSize};
+#else
+		Noesis::MemoryCallbacks MemoryCallbacks{ nullptr, &NoesisAlloc, &NoesisRealloc, &NoesisDealloc, &NoesisAllocSize };
+#endif
 		Noesis::GUI::SetMemoryCallbacks(MemoryCallbacks);
 
 		Noesis::GUI::SetErrorHandler(&NoesisErrorHandler);
@@ -925,3 +1012,4 @@ INoesisRuntimeModuleInterface& INoesisRuntimeModuleInterface::Get()
 
 IMPLEMENT_MODULE(FNoesisRuntimeModule, NoesisRuntime);
 DEFINE_LOG_CATEGORY(LogNoesis);
+DEFINE_LOG_CATEGORY(LogNoesisEngine);
